@@ -1,0 +1,11 @@
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+    
+defaults:
+  - base
+ 
+trainer:
+  experiment_name: sokoban-main
+
+
