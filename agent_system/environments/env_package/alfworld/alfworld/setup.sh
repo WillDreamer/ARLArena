@@ -30,4 +30,6 @@ python3 -m uv pip install alfworld
 alfworld-download -f
 alfworld-download --extra
 
+conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12" -y
+
 echo -e "${GREEN}Installation completed successfully!${NC}"
