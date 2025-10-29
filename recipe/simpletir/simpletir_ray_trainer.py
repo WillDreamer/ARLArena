@@ -1021,7 +1021,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 num_gpus=self.config.trainer.n_gpus_per_node
                 * self.config.trainer.nnodes,
                 rollout_n=self.config.actor_rollout_ref.rollout.n,
-                mask_void_turns=self.config.actor_rollout_ref.actor.mask_void_turns,
+                mask_void_turns=True,
                 append_final_answer_func=self.config.agent.append_final_answer_func,
             )
             generation_manager = AgentHelper(
