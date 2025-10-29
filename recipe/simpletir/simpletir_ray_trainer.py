@@ -948,19 +948,17 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 len(rewards) % self.config.actor_rollout_ref.rollout.val_kwargs.n == 0
             )
             metric_dict[f"val/test_score/{data_source}"] = np.mean(rewards)
-            print(
-                f"""Calculating pass@k rate for {data_source} with k={self.config.actor_rollout_ref.rollout.val_kwargs.k}"""
-            )
+            
             reward_per_test_sample = np.reshape(
                 rewards, (-1, self.config.actor_rollout_ref.rollout.val_kwargs.n)
             )  # [N, n_val]
             pass_at_k_rate = self.compute_pass_at_k(
                 reward_per_test_sample,
-                k=self.config.actor_rollout_ref.rollout.val_kwargs.k,
+                k=self.config.actor_rollout_ref.rollout.val_kwargs.n,
             )
             print(f"[{data_source}]pass_at_k_rate:", pass_at_k_rate)
             metric_dict[
-                f"val/test_score/{data_source}_pass@{self.config.actor_rollout_ref.rollout.val_kwargs.k}"
+                f"val/test_score/{data_source}_pass@{self.config.actor_rollout_ref.rollout.val_kwargs.n}"
             ] = pass_at_k_rate
 
         if reward_extra_info_dict is not None:

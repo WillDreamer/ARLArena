@@ -31,7 +31,7 @@ if pgrep -f "ray" > /dev/null; then
     echo "==================== run "ray stop" to stop ray ===================="
     exit 1
 fi
-PORT=$(( ( RANDOM % 10000 ) ))
+PORT=$(( ( RANDOM % 10000 +1000) ))
 ray start --head --port $PORT
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key

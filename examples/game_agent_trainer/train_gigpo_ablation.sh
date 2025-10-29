@@ -43,7 +43,7 @@ if pgrep -f "ray" > /dev/null; then
     echo "==================== Detected existing Ray processes, exiting... ===================="
     exit 1
 fi
-PORT=$(( ( RANDOM % 10000 ) ))
+PORT=$(( ( RANDOM % 10000 + 1000) ))
 ray start --head --port $PORT
 
 python3 -m examples.data_preprocess.prepare \

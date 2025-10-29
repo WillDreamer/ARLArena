@@ -1,4 +1,17 @@
-# Default values
+set -x
+
+# ======================== GPU auto selection ========================
+GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+# Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
+CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
+export CUDA_VISIBLE_DEVICES
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+# Automatically detect the number of n_gpus_per_node
+NUM_GPUS=${#GPU_LIST[@]}
+echo "Detected ${NUM_GPUS} GPUs for this run"
+
+
+# ======================== Hyper-parameters ========================
 MAX_TURNS=5
 TRAIN_BATCH_SIZE=4
 VAL_SAMPLE_SIZE=4
@@ -11,8 +24,9 @@ MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
-TRAIN_DATASET=("/workspace/AgentRL/datasets/simplelr_math_35/train")
-VALID_DATASET=("/workspace/AgentRL/datasets/simplelr_math_35/test" "/workspace/AgentRL/datasets/deepscaler/aime" "/workspace/AgentRL/datasets/deepscaler/aime25")
+TRAIN_DATASET=("/data1/whx/ARLArena/dataset/simplelr_math_35/train")
+VALID_DATASET=("/data1/whx/ARLArena/dataset/simplelr_math_35/test")
+# VALID_DATASET=("/workspace/AgentRL/datasets/simplelr_math_35/test" "/workspace/AgentRL/datasets/deepscaler/aime" "/workspace/AgentRL/datasets/deepscaler/aime25")
 ROLLOUT_GPU_MEMORY_UTIL=0.75
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
@@ -20,7 +34,7 @@ MODEL_NAME=Qwen/Qwen2.5-3B
 SAVE_FREQ=20
 TEST_FREQ=10
 REMOVE_CLIP=True
-ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=2
+ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1
 REJECTION_SAMPLE=True
 SP_SIZE=1
 GRAD_CLIP=1.0
@@ -29,14 +43,13 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-MASK_VOID_TURNS=True
 OVERSAMPLE=3
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
 CONFIG_NAME=simpletir_trainer
 NNODES=1
-GPUS_PER_NODE=8
+GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
 PROJECT_NAME=simpletir_math
 
@@ -122,7 +135,6 @@ generate_suffix() {
       --acc_filter) suffix+="_accfilter$2"; shift 2 ;;
       --start_clip_step) suffix+="_startclip$2"; shift 2 ;;
       --balance_batch) suffix+="_balbatch$2"; shift 2 ;;
-      --mask_void_turns) suffix+="_maskvoidturns$2"; shift 2 ;;
       --oversample) suffix+="_oversample$2"; shift 2 ;;
       *) shift ;;
     esac
@@ -133,8 +145,8 @@ generate_suffix() {
 
 echo "Arguments received: $@"
 
-SUFFIX=$(generate_suffix "$@")
-RUN_NAME="$RUN_NAME$SUFFIX"
+LOG_PATH=outputs
+RUN_NAME=simpletir_math
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 # Parse named arguments
@@ -170,7 +182,6 @@ while [[ "$#" -gt 0 ]]; do
     --start_clip_step) START_CLIP_STEP="$2"; shift 2 ;;
     --balance_batch) BALANCE_BATCH="$2"; shift 2 ;;
     --tool_use) TOOL_USE="$2"; shift 2 ;;
-    --mask_void_turns) MASK_VOID_TURNS="$2"; shift 2 ;;
     --oversample) OVERSAMPLE="$2"; shift 2 ;;
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
@@ -188,11 +199,23 @@ if [ ${#TRAIN_DATASET[@]} -gt 0 ]; then
   done
 fi
 
+# ======================== start ray ========================
+RAY_TMP=~/ARLArenaoutputs
+export RAY_TMPDIR="$RAY_TMP"
+export TMPDIR="$RAY_TMP"
+# if pgrep -f "ray" > /dev/null; then
+#     echo "==================== Detected existing Ray processes, exiting... ===================="
+#     exit 1
+# fi
+PORT=$(( ( RANDOM % 10000 + 1000 ) ))
+ray start --head --port $PORT --temp-dir "$RAY_TMP"
+
 RUN_NAME+="_$MODEL_NAME"
+
+
 
 echo "RUN_NAME: $RUN_NAME"
 echo "LOG_FILE_PATH: $LOG_FILE_PATH"
-
 echo "Training with the following parameters:"
 echo "Train Batch Size: $TRAIN_BATCH_SIZE"
 echo "Max Prompt Length: $MAX_PROMPT_LENGTH"
@@ -203,7 +226,6 @@ echo "Model Name: $MODEL_NAME"
 echo "Remove Clip: $REMOVE_CLIP"
 echo "grad clip: $GRAD_CLIP"
 echo "balance batch: $BALANCE_BATCH"
-echo "Mask Void Turns: $MASK_VOID_TURNS"
 echo "Oversample Multiplier: $OVERSAMPLE"
 
 # set ppo micro token
@@ -248,24 +270,23 @@ TRAIN_FILES=$(format_dataset_paths "${TRAIN_DATASET[@]}")
 VALID_FILES=$(format_dataset_paths "${VALID_DATASET[@]}")
 echo "TRAIN_FILES: $TRAIN_FILES"
 echo "VALID_FILES: $VALID_FILES"
-
 echo "CONFIG_NAME: $CONFIG_NAME"
 
-# Example of using the variables
-sleep 3
-
+# ======================== wandb ========================
 export SANDBOX_ENDPOINT=http://127.0.0.1:12345/faas/sandbox/
 export WANDB_ENTITY="RL_Reasoning"
 export WANDB_PROMPT_VERSION="simpletir"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
-
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
-# ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
     wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${project_name}/${experiment_name}
+    SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
+
+
 
 PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     --config-name $CONFIG_NAME \
@@ -315,8 +336,6 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     agent.max_turns=$MAX_TURNS \
     data.max_start_length=4096 \
     data.max_obs_length=$MAX_OBS_LENGTH \
-    actor_rollout_ref.actor.mask_tool_output=$TOOL_USE \
-    actor_rollout_ref.actor.mask_void_turns=$MASK_VOID_TURNS \
-    +trainer.val_only=$VAL_ONLY \
+    trainer.val_only=$VAL_ONLY \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
     | tee -a $LOG_FILE_PATH

@@ -36,11 +36,29 @@ conda create -n agentrl_science python==3.12 -y
 conda activate agentrl_science
 python3 -m pip install uv
 
+mkdir -p dataset/simplelr_qwen_level3to5
+wget -P dataset/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
+wget -P dataset/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
+
 # python3 -m uv pip install -e ".[sglang]"
 python3 -m uv pip install -e ".[vllm]"
 pip install --no-deps -e .
 python3 -m uv pip install flash-attn==2.8.3 --no-build-isolation --no-deps
 python3 -m uv pip install -r ./requirements.txt
+python3 -m uv pip install qwen_vl_utils
+python3 -m uv pip installword2number
+# sudo apt-get update && sudo apt-get install -y firejail
+python3 -m uv pip install "fastapi[all]" uvicorn
+### sudo 替换为 ->
+# cd $HOME
+# git clone https://github.com/netblue30/firejail.git
+# cd firejail
+# ./configure --prefix=$HOME/.local --disable-suid
+# make -j
+# make install
+# # 添加到 PATH
+# echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
+# source ~/.bashrc
 
 
 if command -v conda >/dev/null 2>&1; then
@@ -53,5 +71,8 @@ if command -v hf >/dev/null 2>&1; then
 else
   huggingface-cli whoami || die "whoami failed"
 fi
+
+# cd sandbox
+# uvicorn sandbox_api:app --host 127.0.0.1 --port 12345 --workers 4
 
 log "全部完成 🎉"

@@ -81,15 +81,18 @@ async def _run_in_firejail(code: str, timeout: float, stdin_data: str = "") -> d
 
     # 2) Build Firejail command line
     cmd = [
-        "firejail",
-        "--quiet",
-        "--profile=/etc/firejail/sandbox.profile",
-        f"--private={workdir}",
-        "--net=none",              # disable network
-        "--",
-        "python3",
-        src.name,
+        "python3"
     ]
+    # cmd = [
+    #     "firejail",
+    #     "--quiet",
+    #     "--profile=/etc/firejail/sandbox.profile",
+    #     f"--private={workdir}",
+    #     "--net=none",              # disable network
+    #     "--",
+    #     "python3",
+    #     src.name,
+    # ]
 
     # 3) Strip environment to stay below Firejail's MAX_ENVS=256 limit
     whitelist = ("PATH", "LANG", "LC_ALL", "PYTHONIOENCODING", "TERM")
