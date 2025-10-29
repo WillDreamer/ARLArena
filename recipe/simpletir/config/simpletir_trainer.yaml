@@ -51,7 +51,7 @@ actor_rollout_ref:
     disable_log_stats: False
     enforce_eager: False
     free_cache_engine: False
-    n: 16
+    n: 1
     val_kwargs:
       # sampling parameters for validation
       top_k: -1 # 0 for hf rollout, -1 for vllm rollout
