@@ -1,15 +1,20 @@
 set -x
-ulimit -n 131072
 export MKL_THREADING_LAYER=GNU
 unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
-# export VLLM_ATTENTION_BACKEND=XFORMERS
 
+# ======================== GPU auto selection ========================
+GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+# Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
+CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
+export CUDA_VISIBLE_DEVICES
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+# Automatically detect the number of n_gpus_per_node
+NUM_GPUS=${#GPU_LIST[@]}
+echo "Detected ${NUM_GPUS} GPUs for this run"
 
 ROLLOUT_MODE="sync"
-
 num_cpus_per_env_worker=0.2 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
-
 train_data_size=16
 val_data_size=128
 group_size=8
@@ -17,15 +22,26 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-estimator="grpo"
-project_name="TEMPO_alfworld"
+estimator="gigpo"
+project_name="alfworld"
 
+# Check if any ray processes are running, exit if present, otherwise start ray
+if pgrep -f "ray" > /dev/null; then
+    echo "==================== Detected existing Ray processes, exiting... ===================="
+    echo "==================== run "ray stop" to stop ray ===================="
+    exit 1
+fi
+PORT=$(( ( RANDOM % 10000 ) ))
+ray start --head --port $PORT
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
     wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${project_name}/${experiment_name}
+    SAVE_PATH=wandb/${project_name}/${experiment_name}
+    export WANDB_DIR=${SAVE_PATH}
 fi
 
 # We only use data preparation to indicate the modality and the data size.
@@ -38,9 +54,9 @@ for seed in 0 42 33
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
-    
-    python3 -m recipe.world_agent.main_world_agent_ablation \
-    algorithm.adv_estimator=$estimator \
+
+    python3 -m recipe.world_agent.main_world_agent\
+        algorithm.adv_estimator=$estimator \
         data.train_files=$HOME/data/text/train.parquet \
         data.val_files=$HOME/data/text/test.parquet \
         data.train_batch_size=$train_data_size \
@@ -53,27 +69,27 @@ do
         actor_rollout_ref.model.path=$MODEL \
         actor_rollout_ref.actor.optim.lr=1e-6 \
         actor_rollout_ref.model.use_remove_padding=True \
-        actor_rollout_ref.actor.ppo_mini_batch_size=128 \
-        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
+        actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
         actor_rollout_ref.actor.use_kl_loss=False \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-        actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 \
-        actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+        actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
+        actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=False \
-        actor_rollout_ref.rollout.free_cache_engine=True \
+        actor_rollout_ref.rollout.free_cache_engine=False \
         actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-        actor_rollout_ref.rollout.val_kwargs.temperature=0.5 \
+        actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
         actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
         actor_rollout_ref.rollout.val_kwargs.top_k=20 \
-        actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
+        actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32 \
         actor_rollout_ref.ref.fsdp_config.param_offload=True \
         use_invalid_action_penalty=True \
         invalid_action_penalty_coef=0.1 \
@@ -88,10 +104,10 @@ do
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
         trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
-        trainer.rollout_data_dir=/workspace \
+        trainer.rollout_data_dir=outputs/ \
         trainer.project_name=$project_name \
         trainer.experiment_name=$experiment_name \
-        trainer.n_gpus_per_node=8 \
+        trainer.n_gpus_per_node=$NUM_GPUS \
         trainer.nnodes=1 \
         trainer.save_freq=-1 \
         trainer.test_freq=5 \
