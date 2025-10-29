@@ -1142,25 +1142,19 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                         batch.batch["response_mask"] = compute_response_mask(batch)
 
                     # create tool loss mask
-                    if self.config.agent.tool_use and (
-                        self.config.actor_rollout_ref.actor.mask_tool_output
-                        or self.config.actor_rollout_ref.actor.mask_void_turns
-                    ):
+                    if self.config.agent.tool_use:
                         response_length = batch.batch["responses"].shape[-1]
                         response_mask = batch.batch["response_mask"][
                             :, -response_length:
                         ]
 
                         loss_mask = batch.batch["info_mask"][:, -response_length:]
-                        if self.config.actor_rollout_ref.actor.mask_tool_output:
-                            batch.batch["loss_mask"] = loss_mask * response_mask
-                        else:
-                            batch.batch["loss_mask"] = response_mask
+                        
+                        batch.batch["loss_mask"] = loss_mask * response_mask
 
-                        if self.config.actor_rollout_ref.actor.mask_void_turns:
-                            batch.batch["loss_mask"] = batch.batch[
-                                "loss_mask"
-                            ] * batch.batch["void_turn_mask"].reshape(-1, 1)
+                        batch.batch["loss_mask"] = batch.batch[
+                            "loss_mask"
+                        ] * batch.batch["void_turn_mask"].reshape(-1, 1)
 
                         metrics.update(
                             {
@@ -1241,7 +1235,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                         op_token_clip_num = 0
                         repeatness_clip_num = 0
                         number_larger_than_max_all = 0
-                        min_rollout_n = self.config.actor_rollout_ref.rollout.min_n
+                        min_rollout_n = 2
                         group_length_vars = []
 
                         with _timer("rejection_sample", timing_raw):
