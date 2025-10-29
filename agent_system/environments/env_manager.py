@@ -117,7 +117,7 @@ class SearchEnvironmentManager(EnvironmentManagerBase):
         return postprocess_text_obs
 
 
-    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success, episode_lengths=None):
         # Find the last entry with active masks
         for i in reversed(range(len(total_batch_list[batch_idx]))):
             batch_item = total_batch_list[batch_idx][i]
@@ -128,6 +128,9 @@ class SearchEnvironmentManager(EnvironmentManagerBase):
                 
                 data_source = info.get("data_source")
                 success[f"{data_source}_success_rate"].append(won_value)
+                # Optional: record turns to success if provided, align with base implementation
+                if won_value == 1.0 and episode_lengths is not None:
+                    success['turns_to_success'].append(float(episode_lengths[batch_idx]))
                 return  # Exit after finding the first active mask
             
 

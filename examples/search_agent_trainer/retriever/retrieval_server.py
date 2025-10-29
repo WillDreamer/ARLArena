@@ -8,6 +8,7 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
 import datasets
+import threading
 
 import uvicorn
 from fastapi import FastAPI
@@ -197,10 +198,21 @@ class DenseRetriever(BaseRetriever):
         super().__init__(config)
         self.index = faiss.read_index(self.index_path)
         if config.faiss_gpu:
+            # Create explicit GPU resources and disable FAISS temp memory stack to avoid StackDeviceMemory assertions
+            num_gpus = faiss.get_num_gpus()
+            resources_vec = faiss.GpuResourcesVector()
+            device_vec = faiss.IntVector()
+            for device_id in range(num_gpus):
+                res = faiss.StandardGpuResources()
+                # Disable the temporary stack allocator which can assert under concurrent usage
+                res.noTempMemory()
+                resources_vec.push_back(res)
+                device_vec.push_back(device_id)
+
             co = faiss.GpuMultipleClonerOptions()
             co.useFloat16 = True
             co.shard = True
-            self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+            self.index = faiss.index_cpu_to_gpu_multiple(resources_vec, device_vec, self.index, co)
 
         self.corpus = load_corpus(self.corpus_path)
         self.encoder = Encoder(
@@ -212,12 +224,15 @@ class DenseRetriever(BaseRetriever):
         )
         self.topk = config.retrieval_topk
         self.batch_size = config.retrieval_batch_size
+        # Serialize FAISS GPU index access across concurrent requests
+        self.search_lock = threading.Lock()
 
     def _search(self, query: str, num: int = None, return_score: bool = False):
         if num is None:
             num = self.topk
         query_emb = self.encoder.encode(query)
-        scores, idxs = self.index.search(query_emb, k=num)
+        with self.search_lock:
+            scores, idxs = self.index.search(query_emb, k=num)
         idxs = idxs[0]
         scores = scores[0]
         results = load_docs(self.corpus, idxs)
@@ -237,7 +252,8 @@ class DenseRetriever(BaseRetriever):
         for start_idx in range(0, len(query_list), self.batch_size):
             query_batch = query_list[start_idx : start_idx + self.batch_size]
             batch_emb = self.encoder.encode(query_batch)
-            batch_scores, batch_idxs = self.index.search(batch_emb, k=num)
+            with self.search_lock:
+                batch_scores, batch_idxs = self.index.search(batch_emb, k=num)
 
             batch_scores = batch_scores.tolist()
             batch_idxs = batch_idxs.tolist()

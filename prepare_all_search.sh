@@ -53,7 +53,6 @@ save_path=dataset/search
 python examples/search_agent_trainer/search_data_download.py --local_dir $save_path
 cat $save_path/part_* > $save_path/e5_Flat.index
 gzip -d $save_path/wiki-18.jsonl.gz
-
 python examples/data_preprocess/preprocess_search_r1_dataset.py
 
 
@@ -65,6 +64,7 @@ else
 fi
 
 log "Start retriever"
+save_path=dataset/search
 index_file=$save_path/e5_Flat.index
 corpus_file=$save_path/wiki-18.jsonl
 retriever_name=e5
