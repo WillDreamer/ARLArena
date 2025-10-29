@@ -49,14 +49,12 @@ python3 -m uv pip install "faiss-gpu-cu12==1.9.0"
 python3 -m uv pip install nvidia-cublas-cu12==12.4.5.8 
 
 
-save_path=~/data/searchR1
-# python recipe/search_agent/retriever/download.py --save_path $save_path
-python examples/search/searchr1_download.py --local_dir $save_path
+save_path=dataset/search
+python examples/search_agent_trainer/search_data_download.py --local_dir $save_path
 cat $save_path/part_* > $save_path/e5_Flat.index
 gzip -d $save_path/wiki-18.jsonl.gz
 
 python examples/data_preprocess/preprocess_search_r1_dataset.py
-
 
 
 log "hf auth whoami"
@@ -67,20 +65,12 @@ else
 fi
 
 log "Start retriever"
-# index_file=$save_path/e5_Flat.index
-# corpus_file=$save_path/wiki-18.jsonl
-# retriever=intfloat/e5-base-v2
-# python3 recipe/search_agent/retriever/retrieval_server.py --index_path $index_file \
-#                                             --corpus_path $corpus_file \
-#                                             --topk 3 \
-#                                             --retriever_model $retriever &
-# sleep 12000
 index_file=$save_path/e5_Flat.index
 corpus_file=$save_path/wiki-18.jsonl
 retriever_name=e5
 retriever_path=intfloat/e5-base-v2
 
-nohup python examples/search/retriever/retrieval_server.py \
+nohup python examples/search_agent_trainer/retriever/retrieval_server.py \
   --index_path $index_file \
   --corpus_path $corpus_file \
   --topk 3 \

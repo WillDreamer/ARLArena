@@ -1,11 +1,19 @@
 set -x
-
 ENGINE=${1:-vllm}
+
+# ======================== GPU auto selection ========================
+GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+# Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
+CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
+export CUDA_VISIBLE_DEVICES
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+# Automatically detect the number of n_gpus_per_node
+NUM_GPUS=${#GPU_LIST[@]}
+echo "Detected ${NUM_GPUS} GPUs for this run"
 
 train_data_size=256
 val_data_size=512
 group_size=5
-
 ROLLOUT_MODE="sync"
 
 # GiGPO config
@@ -15,22 +23,33 @@ similarity_thresh=0.9 # similarity threshold for GiGPO
 
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-project_name="verl_agent_search_basline"
+project_name="search_agent"
 estimator="gigpo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
+
+# Check if any ray processes are running, exit if present, otherwise start ray
+if pgrep -f "ray" > /dev/null; then
+    echo "==================== Detected existing Ray processes, exiting... ===================="
+    echo "==================== run "ray stop" to stop ray ===================="
+    exit 1
+fi
+PORT=$(( ( RANDOM % 10000 ) ))
+ray start --head --port $PORT
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
     wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${project_name}/${experiment_name}
+    SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
 
-TRAIN_DATA="$HOME/data/searchR1_processed_direct/train.parquet"
-VAL_DATA="$HOME/data/searchR1_processed_direct/test.parquet"
+TRAIN_DATA="dataset/data/searchR1_processed_direct/train.parquet"
+VAL_DATA="dataset/data/searchR1_processed_direct/test.parquet"
 
 python3 -m recipe.search_agent.main_search_agent_ablation \
     algorithm.adv_estimator=gigpo \
@@ -84,7 +103,7 @@ python3 -m recipe.search_agent.main_search_agent_ablation \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \
     trainer.experiment_name=$experiment_name \
-    trainer.n_gpus_per_node=8 \
+    trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.nnodes=1 \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
