@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(1 2)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
 
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
@@ -33,10 +33,17 @@ WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
     wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${project_name}/${experiment_name}
+    SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
 
-PORT=$(( ( RANDOM % 10000 )  + 10000 ))
+# Check if any ray processes are running, exit if present, otherwise start ray
+if pgrep -f "ray" > /dev/null; then
+    echo "==================== Detected existing Ray processes, exiting... ===================="
+    exit 1
+fi
+PORT=$(( ( RANDOM % 10000 ) ))
 ray start --head --port $PORT
 
 python3 -m examples.data_preprocess.prepare \
