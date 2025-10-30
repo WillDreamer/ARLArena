@@ -31,7 +31,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
 
 from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
-from recipe.simpletir.utils.dataset.rl_dataset import RLCustomPromptDataset
+from recipe.simpletir.utils.rl_dataset.rl_dataset import RLCustomPromptDataset
 from verl import DataProto
 from verl.protocol import DataProtoItem, pad_dataproto_to_divisor, unpad_dataproto
 from verl.single_controller.base import Worker
