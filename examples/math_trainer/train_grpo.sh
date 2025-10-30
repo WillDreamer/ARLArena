@@ -200,7 +200,7 @@ if [ ${#TRAIN_DATASET[@]} -gt 0 ]; then
 fi
 
 # ======================== start ray ========================
-RAY_TMP=~/ARLArenaoutputs
+RAY_TMP=~/ARLArena/outputs
 export RAY_TMPDIR="$RAY_TMP"
 export TMPDIR="$RAY_TMP"
 # if pgrep -f "ray" > /dev/null; then
