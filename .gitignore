@@ -13,7 +13,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-dataset/*
+# dataset/*
 tensorflow/my_graph/*
 .idea/
 # C extensions
@@ -130,4 +130,4 @@ output
 webshop-minimal/
 rag_server_dir/
 log_rollout/
-dataset/
+datasets/
