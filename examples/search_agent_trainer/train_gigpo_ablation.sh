@@ -51,7 +51,7 @@ fi
 TRAIN_DATA="dataset/data/searchR1_processed_direct/train.parquet"
 VAL_DATA="dataset/data/searchR1_processed_direct/test.parquet"
 
-python3 -m recipe.search_agent.main_search_agent_ablation \
+python3 -m recipe.search_agent.main_search_agent \
     algorithm.adv_estimator=gigpo \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \

@@ -20,7 +20,7 @@ import os
 import hydra
 import ray
 
-from recipe.search_agent.ppo.ray_trainer import SearchAgentTrainer  
+from recipe.search_agent.ppo.ray_trainer import SearchAgentTrainer
 
 
 @hydra.main(config_path="config", config_name="search_", version_base=None)
@@ -56,7 +56,7 @@ class TaskRunner:
         from verl.single_controller.ray import RayWorkerGroup
 
         if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
-            from recipe.search_agent.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
+            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
 
             actor_rollout_cls = (
                 AsyncActorRolloutRefWorker
