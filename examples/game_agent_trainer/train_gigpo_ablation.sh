@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(1)  # <<<------  which GPUs to use, directly fill here
 
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
@@ -22,7 +22,7 @@ mode="mean_std_norm"
 
 MODEL=Qwen/Qwen2.5-VL-3B-Instruct
 MODEL_SHORT="${MODEL##*/}"
-project_name="verl_agent_sokoban_basline"
+project_name="sokoban_basline"
 estimator="gigpo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
@@ -39,10 +39,10 @@ if [ "$WANDB_API_KEY" != "" ]; then
 fi
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-if pgrep -f "ray" > /dev/null; then
-    echo "==================== Detected existing Ray processes, exiting... ===================="
-    exit 1
-fi
+# if pgrep -f "ray" > /dev/null; then
+#     echo "==================== Detected existing Ray processes, exiting... ===================="
+#     exit 1
+# fi
 PORT=$(( ( RANDOM % 10000 + 1000) ))
 ray start --head --port $PORT
 
