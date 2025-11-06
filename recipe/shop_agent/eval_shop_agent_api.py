@@ -58,12 +58,12 @@ def main(config):
     
     print(config.data)
     
-    #这个会出问题
+    
     tokenizer = safe_load_tokenizer(config.actor_rollout_ref.model.path)
     
     actor_wg = ApiCallingWrapperWg(config, tokenizer)
     
-    #感觉code below's issue不小, 和我做的api测试相去甚远
+    
     envs, val_envs = make_envs(config)
     processor = hf_processor(config.actor_rollout_ref.model.path, trust_remote_code=True, use_fast=True)
 
