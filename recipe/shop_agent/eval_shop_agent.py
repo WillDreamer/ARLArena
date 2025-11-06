@@ -1,4 +1,3 @@
-
 from vllm import LLM, SamplingParams
 from verl.single_controller.ray.base import RayWorkerGroup
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -24,6 +23,7 @@ def main(config):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     print(config.data)
     tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
+    
     actor_wg = VllmWrapperWg(config, tokenizer)
     
     envs, val_envs = make_envs(config)
