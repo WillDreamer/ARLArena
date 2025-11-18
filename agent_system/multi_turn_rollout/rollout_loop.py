@@ -449,7 +449,7 @@ class TrajectoryCollector:
         
         return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings, metrics_dict
     
-    def dynamic_multi_turn_loop(
+    def dynamic_multi_turn_loop(  # dapo
             self,
             gen_batch: DataProto, 
             actor_rollout_wg, 
