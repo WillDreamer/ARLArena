@@ -8,6 +8,12 @@ ulimit -n 1048576
 export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+ulimit -n 1048576
+
+export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
+rm -rf "$RAY_TMPDIR"
+mkdir -p "$RAY_TMPDIR"
 
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
@@ -25,15 +31,18 @@ group_size=8
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-MODEL=Qwen/Qwen3-VL-2B-Instruct
+MODEL=Qwen/Qwen2.5-VL-3B-Instruct
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
+project_name="verl_agent_sokoban_basline"
+estimator="gae"
 project_name="verl_agent_sokoban_basline"
 estimator="gae"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
+WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
 WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
@@ -55,6 +64,11 @@ PORT=$(( ( RANDOM % 999 ) + 1001 ))
 DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 
+
+PORT=$(( ( RANDOM % 999 ) + 1001 ))
+DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
+ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
+
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
     --train_data_size $train_data_size \
@@ -65,7 +79,10 @@ VAL_DATA="$HOME/data/visual/test.parquet"
 
 mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
 
+mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
+
 python3 -m recipe.game_agent.main_game_agent_ablation \
+    algorithm.adv_estimator=$estimator \
     algorithm.adv_estimator=$estimator \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \
@@ -119,8 +136,13 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
+    trainer.save_freq=10 \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
+    trainer.val_before_train=False "$@" \
+    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
+    critic.model.path=$Critic_MODEL \
+    algorithm.filter_groups.enable=True
     trainer.val_before_train=False "$@" \
     trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
     critic.model.path=$Critic_MODEL \
