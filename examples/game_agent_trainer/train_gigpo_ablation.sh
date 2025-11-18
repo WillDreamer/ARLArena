@@ -25,7 +25,7 @@ group_size=8
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+MODEL=Qwen/Qwen3-VL-2B-Instruct
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_basline"
