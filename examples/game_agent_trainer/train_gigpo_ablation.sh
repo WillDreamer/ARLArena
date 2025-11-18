@@ -25,7 +25,6 @@ group_size=8  # TODO: increase to 16?
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-<<<<<<< HEAD
 # ========== 模型配置 ==========
 # 使用合并后的模型作为初始模型
 # 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
@@ -35,9 +34,6 @@ mode="mean_std_norm"
 # 原始 base model（如果需要的话）
 MODEL=Qwen/Qwen3-VL-4B-Instruct
 
-=======
-MODEL=Qwen/Qwen3-VL-2B-Instruct
->>>>>>> 353e483 (add qwen3vl_env.yml)
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_grpo_debug"
