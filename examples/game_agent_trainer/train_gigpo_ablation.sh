@@ -3,6 +3,11 @@ ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
 GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+ulimit -n 1048576
+
+export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
+rm -rf "$RAY_TMPDIR"
+mkdir -p "$RAY_TMPDIR"
 
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
@@ -21,14 +26,15 @@ ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
 MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_basline"
-estimator="gigpo"
+estimator="gae"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
-WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
+WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
@@ -39,12 +45,15 @@ if [ "$WANDB_API_KEY" != "" ]; then
 fi
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-if pgrep -f "ray" > /dev/null; then
-    echo "==================== Detected existing Ray processes, exiting... ===================="
-    exit 1
-fi
-PORT=$(( ( RANDOM % 10000 + 1000) ))
-ray start --head --port $PORT
+# if pgrep -f "ray" > /dev/null; then
+#     echo "==================== Detected existing Ray processes, exiting... ===================="
+#     exit 1
+# fi
+
+
+PORT=$(( ( RANDOM % 999 ) + 1001 ))
+DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
+ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
@@ -54,8 +63,10 @@ python3 -m examples.data_preprocess.prepare \
 TRAIN_DATA="$HOME/data/visual/train.parquet"
 VAL_DATA="$HOME/data/visual/test.parquet"
 
+mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
+
 python3 -m recipe.game_agent.main_game_agent_ablation \
-    algorithm.adv_estimator=gigpo \
+    algorithm.adv_estimator=$estimator \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \
     data.train_batch_size=$train_data_size \
@@ -107,7 +118,10 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.experiment_name=$experiment_name \
     trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.nnodes=1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq=10 \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
-    trainer.val_before_train=False "$@"
+    trainer.val_before_train=False "$@" \
+    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
+    critic.model.path=$Critic_MODEL \
+    algorithm.filter_groups.enable=True

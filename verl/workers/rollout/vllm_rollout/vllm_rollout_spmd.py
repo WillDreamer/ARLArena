@@ -49,7 +49,7 @@ from vllm import LLM, SamplingParams
 from vllm.config import CompilationConfig, CompilationLevel
 from vllm.distributed import parallel_state as vllm_ps
 from vllm.lora.request import LoRARequest
-from vllm.model_executor.sampling_metadata import SamplingMetadata
+# from vllm.model_executor.layers.sampler import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
 from verl import DataProto
