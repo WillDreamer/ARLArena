@@ -38,7 +38,7 @@ do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
-    python3 -m recipe.shop_agent.main_shop_agent_ablation \
+    python3 -m recipe.shop_agent.main_shop_agent \
         algorithm.adv_estimator=$estimator \
         data.train_files=$HOME/data/text/train.parquet \
         data.val_files=$HOME/data/text/test.parquet \

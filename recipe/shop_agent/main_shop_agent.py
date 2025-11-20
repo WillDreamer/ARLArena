@@ -56,7 +56,7 @@ class TaskRunner:
         from verl.single_controller.ray import RayWorkerGroup
 
         if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
-            from recipe.shop_agent.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
+            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker
 
             actor_rollout_cls = (
                 AsyncActorRolloutRefWorker

@@ -11,8 +11,8 @@ die() { printf "\033[1;31m[x] %s\033[0m\n" "$*"; exit 1; }
 trap 'die "脚本在第 $LINENO 行出错（exit=$?）。"' ERR
 
 eval "$(conda shell.bash hook)"
-conda create -n verl_agent python==3.10 -c conda-forge -y
-conda activate verl_agent
+conda create -n agentrl_web python==3.10 -c conda-forge -y
+conda activate agentrl_web
 python3 -m pip install uv
 
 log "安装 requirements_webshop.txt"
