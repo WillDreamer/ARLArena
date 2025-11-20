@@ -37,7 +37,7 @@ cd ./agent_system/environments/env_package/webshop/webshop && bash setup.sh || w
 
 # 再次确保 conda 激活（有些脚本可能改变了环境）
 if command -v conda >/dev/null 2>&1; then
-  conda activate verl_agent || true
+  conda activate agentrl_web || true
 fi
 
 

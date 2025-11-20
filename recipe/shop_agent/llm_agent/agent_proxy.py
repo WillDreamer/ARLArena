@@ -6,7 +6,8 @@ import hydra
 import os
 from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
-# from .base_llm import ConcurrentLLM
+from recipe.shop_agent.llm_agent.base_llm import ConcurrentLLM
+import numpy as np
 # import time
 
 class VllmWrapperWg: # Thi is a developing class for eval and test
@@ -62,48 +63,71 @@ class VllmWrapperWg: # Thi is a developing class for eval and test
 		lm_outputs.meta_info = lm_inputs.meta_info
 
 		return lm_outputs
+
 	
-# class ApiCallingWrapperWg:
-#     """Wrapper class for API-based LLM calls that fits into the VERL framework"""
+class ApiCallingWrapperWg:
+    """Wrapper class for API-based LLM calls that fits into the VERL framework"""
     
-#     def __init__(self, config, tokenizer):
-#         self.config = config
-#         self.tokenizer = tokenizer
-#         model_info = config.model_info[config.model_config.model_name]
-#         self.llm_kwargs = model_info.generation_kwargs
+    def __init__(self, config, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        # model_info adjust
+        model_info = config.model_info[config.model_config.model_name]
+        self.llm_kwargs = model_info.generation_kwargs
         
+        # concurrent LLM需要改
+        self.llm = ConcurrentLLM(
+			provider=model_info.provider_name,
+            model_name=model_info.model_name,
+            max_concurrency=config.model_config.max_concurrency
+        )
         
-#         self.llm = ConcurrentLLM(
-# 			provider=model_info.provider_name,
-#             model_name=model_info.model_name,
-#             max_concurrency=config.model_config.max_concurrency
-#         )
+        print(f'API-based LLM ({model_info.provider_name} - {model_info.model_name}) initialized')
+
+
+    def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
+        """
+        Convert the input ids to text, make API calls to generate responses, 
+        and create a DataProto with the results.
+        """
+
+        messages_list = lm_inputs.non_tensor_batch.get('messages_list', None)
+        if messages_list is not None:
+            messages_list = messages_list.tolist()
+        else:
+            # 回退：直接用 input_ids 构建单轮聊天消息
+            input_ids = lm_inputs.batch.get('input_ids', None)
+            if input_ids is None:
+                raise KeyError("messages_list missing and input_ids unavailable to build fallback prompts")
+            if hasattr(input_ids, "detach"):
+                input_ids = input_ids.detach().cpu()
+            fallback_messages = []
+            for ids in input_ids:
+                text = self.tokenizer.decode(ids.tolist(), skip_special_tokens=True)
+                fallback_messages.append([{"role": "user", "content": text}])
+            messages_list = fallback_messages
+            print("[WARN] messages_list not provided; constructed fallback prompts from input_ids")
+
+        results, failed_messages = self.llm.run_batch(
+            messages_list=messages_list,
+            **self.llm_kwargs
+        )
+        assert not failed_messages, f"Failed to generate responses for the following messages: {failed_messages}"
+
+        texts = [result["response"] for result in results]
+        env_ids = lm_inputs.non_tensor_batch.get('env_ids')
+        if env_ids is None:
+            env_ids = np.arange(len(texts), dtype=object)
+        group_ids = lm_inputs.non_tensor_batch.get('group_ids')
+        if group_ids is None:
+            group_ids = np.zeros(len(texts), dtype=object)
+        print(f'[DEBUG] texts: {texts}')
+        lm_outputs = DataProto()
+        lm_outputs.non_tensor_batch = {
+			'response_texts': texts,
+			'env_ids': env_ids,
+			'group_ids': group_ids
+		} # this is a bit hard-coded to bypass the __init__ check in DataProto
+        lm_outputs.meta_info = lm_inputs.meta_info
         
-#         print(f'API-based LLM ({model_info.provider_name} - {model_info.model_name}) initialized')
-
-
-#     def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
-#         """
-#         Convert the input ids to text, make API calls to generate responses, 
-#         and create a DataProto with the results.
-#         """
-
-#         messages_list = lm_inputs.non_tensor_batch['messages_list'].tolist()
-#         results, failed_messages = self.llm.run_batch(
-#             messages_list=messages_list,
-#             **self.llm_kwargs
-#         )
-#         assert not failed_messages, f"Failed to generate responses for the following messages: {failed_messages}"
-
-#         texts = [result["response"] for result in results]
-#         print(f'[DEBUG] texts: {texts}')
-#         lm_outputs = DataProto()
-#         lm_outputs.non_tensor_batch = {
-# 			'response_texts': texts,
-# 			'env_ids': lm_inputs.non_tensor_batch['env_ids'],
-# 			'group_ids': lm_inputs.non_tensor_batch['group_ids']
-# 		} # this is a bit hard-coded to bypass the __init__ check in DataProto
-#         lm_outputs.meta_info = lm_inputs.meta_info
-        
-#         return lm_outputs
-
+        return lm_outputs
