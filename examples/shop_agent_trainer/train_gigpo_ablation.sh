@@ -1,14 +1,28 @@
 set -x
-ulimit -n 131072
 export MKL_THREADING_LAYER=GNU
 unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
-# export VLLM_ATTENTION_BACKEND=XFORMERS
+ulimit -n 1048576
+
+# ======================== GPU auto selection ========================
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+# Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
+CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
+export CUDA_VISIBLE_DEVICES
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+# Automatically detect the number of n_gpus_per_node
+NUM_GPUS=${#GPU_LIST[@]}
+echo "Detected ${NUM_GPUS} GPUs for this run"
+
+export RAY_TMPDIR="/data2/whx/ray_$(date +%s)"
+rm -rf "$RAY_TMPDIR"
+mkdir -p "$RAY_TMPDIR"
 
 ROLLOUT_MODE="sync"
+PORT=$(( ( RANDOM % 10000 +1000) ))
+ray status >/dev/null 2>&1 || ray start --head --port $PORT
 
-num_cpus_per_env_worker=0.2 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
-
+num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 train_data_size=16
 val_data_size=128
 group_size=8
@@ -17,13 +31,15 @@ mode="mean_norm" # "mean_norm" or "mean_std_norm"
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 estimator="gigpo"
-project_name="HUPO_webshop"
+project_name="ARLArena_webshop"
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
     wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${project_name}/${experiment_name}
+    SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
     
@@ -35,7 +51,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0 42 33
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -64,7 +80,7 @@ do
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=True \
         actor_rollout_ref.rollout.free_cache_engine=False \
@@ -78,17 +94,19 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
+        algorithm.filter_groups.enable=True \
+        algorithm.filter_groups.max_num_gen_batches=3 \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-        trainer.rollout_data_dir=/workspace \
+        trainer.rollout_data_dir=/data1/whx/AgentRL/outputs/${experiment_name} \
         trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
         trainer.experiment_name=$experiment_name \
-        trainer.n_gpus_per_node=8 \
+        trainer.n_gpus_per_node=$NUM_GPUS \
         trainer.nnodes=1 \
         trainer.save_freq=-1 \
         trainer.test_freq=10 \
