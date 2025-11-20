@@ -20,8 +20,7 @@ pip install -r requirements_webshop.txt
 
 log "安装 faiss-cpu"
 conda install -c pytorch faiss-cpu -y
-sudo apt update
-sudo apt install -y default-jdk
+# sudo apt install -y default-jdk
 conda install -c conda-forge openjdk=21 maven -y
 conda install mkl -y
 
