@@ -24,7 +24,6 @@ conda install -c pytorch faiss-cpu -y
 conda install -c conda-forge openjdk=21 maven -y
 conda install mkl -y
 
-
 # webshop installation, model loading
 log "安装 spacy"
 # pip install -U "numpy==2.2.6" "scipy==1.15.3"

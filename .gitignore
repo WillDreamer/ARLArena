@@ -131,3 +131,10 @@ webshop-minimal/
 rag_server_dir/
 log_rollout/
 datasets/
+
+.pre-commit-config.yaml
+.readthedocs.yaml
+
+agent_system/environments/env_package/webshop/webshop/dataset/items_human_ins.json
+agent_system/environments/env_package/webshop/webshop/dataset/items_ins_v2_1000.json
+agent_system/environments/env_package/webshop/webshop/dataset/items_shuffle_1000.json
