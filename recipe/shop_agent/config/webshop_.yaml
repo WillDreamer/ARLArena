@@ -3,6 +3,8 @@ hydra:
     - file://verl/trainer/config
 
 defaults:
+  - _self_
+  - model_api
   - ppo_trainer # this is a symbolic link to the verl/verl/trainer/config/ppo_trainer.yaml file
 
 invalid_action_penalty_coef: 0.1

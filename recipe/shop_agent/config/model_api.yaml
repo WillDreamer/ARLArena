@@ -1,7 +1,7 @@
 # recipe/shop_agent/config/model_api.yaml
 model_config:
   model_name: gpt-4o-mini         # ✅ 当前要跑的模型
-  max_concurrency: 3              # 可同时发起的请求数
+  max_concurrency: 20             # 可同时发起的请求数
 
 model_info:
   gpt-4o-mini:

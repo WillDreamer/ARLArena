@@ -3,7 +3,7 @@
 # DeepSeek, Anthropic, Together 先注释掉，方便未来扩展
 from dotenv import load_dotenv
 load_dotenv(override=True)
-
+import traceback
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Any, Tuple, Union
 import os
@@ -145,6 +145,7 @@ class ConcurrentLLM:
                         }))
                     except Exception as e:
                         print(f"[DEBUG] API error: {e}")
+                        traceback.print_exc()
                         failures.append(messages)
                 return batch_results, failures
 
@@ -158,20 +159,21 @@ class ConcurrentLLM:
                 current_batch = next_batch
                 time.sleep(2)
             else:
+                current_batch = []
                 break
 
         return results, current_batch
 
 
 # ===================== ✅ 简单测试 =====================
-if __name__ == "__main__":
-    llm = ConcurrentLLM(provider="openai", model_name="gpt-4o-mini", max_concurrency=3)
-    messages = [
-        [{"role": "user", "content": "Say 1"}],
-        [{"role": "user", "content": "Say 2"}],
-        [{"role": "user", "content": "Say 3"}],
-    ]
-    results, failed = llm.run_batch(messages, temperature=0.7)
-    for r in results:
-        if r:
-            print(r["response"])
+# if __name__ == "__main__":
+#     llm = ConcurrentLLM(provider="openai", model_name="gpt-4o-mini", max_concurrency=3)
+#     messages = [
+#         [{"role": "user", "content": "Say 1"}],
+#         [{"role": "user", "content": "Say 2"}],
+#         [{"role": "user", "content": "Say 3"}],
+#     ]
+#     results, failed = llm.run_batch(messages, temperature=0.7)
+#     for r in results:
+#         if r:
+#             print(r["response"])

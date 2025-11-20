@@ -9,6 +9,7 @@ from verl import DataProto
 import hydra
 import os
 import time
+import pickle
 from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -85,7 +86,7 @@ def main(config):
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=4,
+            batch_size=64,
             num_workers=2,
             shuffle=True,
             drop_last=False,
@@ -131,12 +132,24 @@ def main(config):
 
     
         start_time = time.time()
-        #result: important
+        #result: important 存下来
         result = traj_collector.multi_turn_loop_for_eval(
                         gen_batch=test_gen_batch,
                         actor_rollout_wg=actor_wg,
                         envs=envs
                         )
+
+        # Persist every evaluation result for later inspection
+        snapshot_dir = Path("outputs_webshop") / "eval_results"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        snapshot_path = snapshot_dir / f"result_seed{config.env.seed}_{timestamp}.pkl"
+        try:
+            with snapshot_path.open("wb") as f:
+                pickle.dump(result, f)
+            print(f"Saved evaluation result to {snapshot_path}")
+        except Exception as exc:
+            print(f"Warning: failed to save evaluation result to {snapshot_path}: {exc}")
 
         # 提取success['webshop_task_score']大于0.8对应的response_texts，并保存
         task_scores = result['success'].get('webshop_task_score (not success_rate)', None)
