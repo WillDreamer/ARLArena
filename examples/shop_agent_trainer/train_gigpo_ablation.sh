@@ -14,13 +14,13 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-export RAY_TMPDIR="/data2/whx/ray_$(date +%s)"
+export RAY_TMPDIR="/data2/whx/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
 ROLLOUT_MODE="sync"
 PORT=$(( ( RANDOM % 10000 +1000) ))
-ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host 0.0.0.0 --dashboard-port 7777
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
 
 num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 train_data_size=16
@@ -95,8 +95,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=3 \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
