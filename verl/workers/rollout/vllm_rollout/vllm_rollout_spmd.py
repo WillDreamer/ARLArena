@@ -46,11 +46,23 @@ from filelock import FileLock
 from omegaconf import DictConfig, ListConfig
 from tensordict import TensorDict
 from vllm import LLM, SamplingParams
-from vllm.config import CompilationConfig, CompilationLevel
+
+from vllm.config import CompilationConfig
+try:
+    # https://github.com/vllm-project/vllm/commit/96b9aa5aa076e64c68765232aec343e4d0006e2a
+    from vllm.config import CompilationMode
+    _use_compilation_mode = True
+except ImportError:
+    from vllm.config import CompilationLevel
+    _use_compilation_mode = False
 from vllm.distributed import parallel_state as vllm_ps
 from vllm.lora.request import LoRARequest
-# from vllm.model_executor.layers.sampler import SamplingMetadata
-from vllm.worker.worker_base import WorkerWrapperBase
+# from vllm.model_executor.sampling_metadata import SamplingMetadata
+try:
+    from vllm.worker.worker_base import WorkerWrapperBase
+except ModuleNotFoundError:
+    # https://github.com/vllm-project/vllm/commit/6a113d9aed8221a9c234535958e70e34ab6cac5b
+    from vllm.v1.worker.worker_base import WorkerWrapperBase
 
 from verl import DataProto
 from verl.third_party.vllm import VLLM_SLEEP_LEVEL
@@ -170,9 +182,15 @@ class vLLMRollout(BaseRollout):
         # enforce_eager must be False to use cudagraph
         if not config.enforce_eager and cudagraph_capture_sizes:
             if isinstance(cudagraph_capture_sizes, ListConfig):
-                compilation_config["compilation_config"] = CompilationConfig(
+                if _use_compilation_mode:
+                    compilation_config["compilation_config"] = CompilationConfig(
+                    level=CompilationMode.VLLM_COMPILE, cudagraph_capture_sizes=cudagraph_capture_sizes
+                )
+                else:
+                    compilation_config["compilation_config"] = CompilationConfig(
                     level=CompilationLevel.PIECEWISE, cudagraph_capture_sizes=cudagraph_capture_sizes
                 )
+                
             else:
                 logger.warning(f"cudagraph_capture_sizes must be a list, but got {cudagraph_capture_sizes}")
 
@@ -408,7 +426,7 @@ def _monkey_patch_compute_logits(model, vocab_size: int):
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-        sampling_metadata: SamplingMetadata,
+        sampling_metadata: Any,
     ) -> torch.Tensor:
         logits = original_compute_logits(hidden_states, sampling_metadata)
         logits[..., vocab_size:] = float("-inf")
