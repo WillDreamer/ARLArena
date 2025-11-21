@@ -84,7 +84,30 @@ algorithm:
   kl_ctrl:
     kl_coef: 0.0
 
+# Enable AEPO (Adaptive Entropy Policy Optimization) instead of standard GRPO
+# Set use_aepo: true to use AEPO, or omit/set to false for standard GRPO
+use_aepo: False
+
 agent:
   tool_use: True
   max_turns: 5
   append_final_answer_func: True
+  
+  # AEPO-specific configuration (only used when use_aepo: true)
+  # These parameters control the adaptive entropy-based rollout and branching behavior
+  aepo:
+    # Core AEPO parameters
+    entropy_weight: 0.5           # Weight for entropy in branching decision (higher = more branching on uncertainty)
+    branch_probability: 0.5       # Base probability threshold for branching (0-1)
+    initial_rollouts: 1           # Initial number of rollouts per sample (if dynamic_rollouts disabled)
+    logprobs: 10                  # Number of top logprobs to request for entropy calculation
+    
+    # Dynamic initial rollouts (AEPO-specific feature)
+    enable_dynamic_rollouts: False  # If True, dynamically determines initial rollouts based on entropy
+    initial_entropy_tokens: 50     # Number of tokens to sample for initial entropy estimation
+    dynamic_rollout_min: 1         # Minimum initial rollouts when using dynamic mode
+    dynamic_rollout_max: null      # Maximum initial rollouts (null = no limit)
+    
+    # Branching control
+    consecutive_branch_penalty: 0.05  # Penalty factor for consecutive branches (0-1, higher = less consecutive branching)
+    beam_size: 2                      # Maximum branches to create from one sample
