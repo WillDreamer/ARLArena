@@ -931,7 +931,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                             old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
                             entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
 
-                            if self.config.algorithm.use_kl_loss:
+                            if self.config.actor_rollout_ref.rollout.use_kl_loss:
                                 ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
                                     
                             self._dump_generations(
@@ -944,7 +944,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
-                                ref_log_probs=ref_log_probs if self.config.algorithm.use_kl_loss else None,
+                                ref_log_probs=ref_log_probs if self.config.actor_rollout_ref.rollout.use_kl_loss else None,
                                 dump_path=rollout_data_dir,
                             )
                     
