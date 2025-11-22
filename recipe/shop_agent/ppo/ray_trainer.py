@@ -265,7 +265,7 @@ class ShopAgentTrainer(RayPPOTrainer):
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, input_ids_list, output_ids_list, log_probs, old_log_probs, entropy, ref_log_probs, dump_path):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
@@ -275,6 +275,12 @@ class ShopAgentTrainer(RayPPOTrainer):
             "input": inputs,
             "output": outputs,
             "score": scores,
+            "input_ids": input_ids_list,
+            "output_ids": output_ids_list,
+            "log_probs": log_probs,
+            "old_log_probs": old_log_probs,
+            "entropy": entropy,
+            "ref_log_probs": ref_log_probs,
             "step": [self.global_steps] * n,
         }
 
@@ -800,6 +806,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
@@ -918,11 +925,26 @@ class ShopAgentTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            output_ids_list = batch.batch["responses"].cpu().tolist()
+                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+
+                            if self.config.algorithm.use_kl_loss:
+                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                                    
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
+                                input_ids_list=input_ids_list,
+                                output_ids_list=output_ids_list,
+                                log_probs=log_probs,
+                                old_log_probs=old_log_probs,
+                                entropy=entropy,
+                                ref_log_probs=ref_log_probs if self.config.algorithm.use_kl_loss else None,
                                 dump_path=rollout_data_dir,
                             )
                     
