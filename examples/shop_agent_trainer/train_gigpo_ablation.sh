@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3 5 6)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,7 +20,7 @@ mkdir -p "$RAY_TMPDIR"
 
 ROLLOUT_MODE="sync"
 PORT=$(( ( RANDOM % 10000 +1000) ))
-ray status >/dev/null 2>&1 || ray start --head --port $PORT
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host 0.0.0.0 --dashboard-port 7777
 
 num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 train_data_size=16
@@ -49,9 +49,9 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2)) # evaluate 2 × val_data_size tasks during each iteration
 
-for seed in 0 42 33
+for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic_len_900"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -61,7 +61,7 @@ do
         data.train_batch_size=$train_data_size \
         data.val_batch_size=$val_data_size \
         data.max_prompt_length=4096 \
-        data.max_response_length=500 \
+        data.max_response_length=900 \
         data.filter_overlong_prompts=True \
         data.truncation='error' \
         data.return_raw_chat=True \
@@ -71,7 +71,8 @@ do
         actor_rollout_ref.model.use_remove_padding=True \
         actor_rollout_ref.actor.ppo_mini_batch_size=128 \
         actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
-        actor_rollout_ref.actor.use_kl_loss=False \
+        actor_rollout_ref.actor.use_kl_loss=True \
+        actor_rollout_ref.actor.kl_loss_update=False \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=True \
@@ -80,7 +81,7 @@ do
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=True \
         actor_rollout_ref.rollout.free_cache_engine=False \
@@ -108,7 +109,7 @@ do
         trainer.experiment_name=$experiment_name \
         trainer.n_gpus_per_node=$NUM_GPUS \
         trainer.nnodes=1 \
-        trainer.save_freq=-1 \
+        trainer.save_freq=10 \
         trainer.test_freq=10 \
         trainer.total_epochs=150 \
         trainer.val_before_train=False $@
