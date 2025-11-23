@@ -214,6 +214,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         raise NotImplementedError
     return data
 
+#* Newly added metrics
 def to_jsonable(obj):
     if isinstance(obj, torch.Tensor):
         return obj.tolist()
@@ -286,6 +287,8 @@ class ShopAgentTrainer(RayPPOTrainer):
             "score": scores,
             "step": [self.global_steps] * n,
         }
+
+        #* Newly added metrics
         analysis_data = {}
         if input_ids_list is not None:
             analysis_data["input_ids"] = to_jsonable(input_ids_list)
@@ -901,7 +904,6 @@ class ShopAgentTrainer(RayPPOTrainer):
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
                         # compute advantages, executed on the driver process
-
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
                         batch = compute_advantage(
@@ -945,6 +947,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            #* Newly added metrics
                             input_ids_list = batch.batch["prompts"].cpu().tolist()
                             output_ids_list = batch.batch["responses"].cpu().tolist()
                             log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
@@ -955,7 +958,8 @@ class ShopAgentTrainer(RayPPOTrainer):
                                 ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
                             else:
                                 ref_log_probs = None
-                                    
+
+                            #* Newly added metrics 
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
