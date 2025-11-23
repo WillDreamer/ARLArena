@@ -214,6 +214,14 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         raise NotImplementedError
     return data
 
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
 
 class AdvantageEstimator(str, Enum):
     """
@@ -265,24 +273,32 @@ class ShopAgentTrainer(RayPPOTrainer):
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, input_ids_list, output_ids_list, log_probs, old_log_probs, entropy, ref_log_probs, dump_path):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
 
         n = len(inputs)
+        # Only add log_probs, old_log_probs, entropy, ref_log_probs to base_data if they are not None
         base_data = {
             "input": inputs,
             "output": outputs,
             "score": scores,
-            "input_ids": input_ids_list,
-            "output_ids": output_ids_list,
-            "log_probs": log_probs,
-            "old_log_probs": old_log_probs,
-            "entropy": entropy,
-            "ref_log_probs": ref_log_probs,
             "step": [self.global_steps] * n,
         }
+        analysis_data = {}
+        if input_ids_list is not None:
+            analysis_data["input_ids"] = to_jsonable(input_ids_list)
+        if output_ids_list is not None:
+            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        if log_probs is not None:
+            analysis_data["log_probs"] = to_jsonable(log_probs)
+        if old_log_probs is not None:
+            analysis_data["old_log_probs"] = to_jsonable(old_log_probs)
+        if entropy is not None:
+            analysis_data["entropy"] = to_jsonable(entropy)
+        if ref_log_probs is not None:
+            analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
 
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
@@ -292,6 +308,10 @@ class ShopAgentTrainer(RayPPOTrainer):
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if analysis_data is not None:
+                for j in range(log_probs.shape[0]):
+                    entry = {k: v[j] for k, v in analysis_data.items()}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         print(f"Dumped generations to {filename}")
 
@@ -931,8 +951,10 @@ class ShopAgentTrainer(RayPPOTrainer):
                             old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
                             entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
 
-                            if self.config.actor_rollout_ref.rollout.use_kl_loss:
+                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
                                 ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            else:
+                                ref_log_probs = None
                                     
                             self._dump_generations(
                                 inputs=inputs,
@@ -944,7 +966,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
-                                ref_log_probs=ref_log_probs if self.config.actor_rollout_ref.rollout.use_kl_loss else None,
+                                ref_log_probs=ref_log_probs,
                                 dump_path=rollout_data_dir,
                             )
                     
