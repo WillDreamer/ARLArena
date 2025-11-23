@@ -397,6 +397,18 @@ class DataParallelPPOActor(BasePPOActor):
         on_policy = len(mini_batches) == 1 and self.config.ppo_epochs == 1
 
         metrics = {}
+        # 初始化logprobs信息为DataProto格式
+        from verl.protocol import DataProto
+
+        logprobs_dp = {
+            "log_prob": [],
+            "old_log_prob": [],
+            "entropy": [],
+            "token_ids": [],
+        }
+        if self.config.use_kl_loss:
+            logprobs_dp["ref_log_prob"] = []
+
         for _ in range(self.config.ppo_epochs):
             for batch_idx, mini_batch in enumerate(mini_batches):
                 if self.config.use_dynamic_bsz:
@@ -431,22 +443,27 @@ class DataParallelPPOActor(BasePPOActor):
                     calculate_entropy = False
                     if entropy_coeff != 0:
                         calculate_entropy = True
+
+                    #* new log prob entropy
                     entropy, log_prob = self._forward_micro_batch(
                         model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
                     )
 
+                    #* 收集micro_batch信息到logprobs_dp字典
+                    logprobs_dp["log_prob"].append(log_prob.detach().cpu())
+                    logprobs_dp["token_ids"].append(model_inputs["input_ids"].detach().cpu())
+                    logprobs_dp["entropy"].append(entropy.detach().cpu())
+
                     if on_policy:
-                        old_log_prob = log_prob.detach()
+                        curr_old_log_prob = log_prob.detach()
                     else:
-                        old_log_prob = model_inputs["old_log_probs"]
+                        curr_old_log_prob = model_inputs["old_log_probs"]
+                    logprobs_dp["old_log_prob"].append(curr_old_log_prob.detach().cpu())
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
-                    # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla
-                    # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
-                    # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
-                        old_log_prob=old_log_prob,
+                        old_log_prob=curr_old_log_prob,
                         log_prob=log_prob,
                         advantages=advantages,
                         response_mask=response_mask,
@@ -457,7 +474,6 @@ class DataParallelPPOActor(BasePPOActor):
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
-
                         # compute policy loss
                         policy_loss = pg_loss - entropy_loss * entropy_coeff
                     else:
@@ -465,15 +481,25 @@ class DataParallelPPOActor(BasePPOActor):
 
                     if self.config.use_kl_loss:
                         ref_log_prob = model_inputs["ref_log_prob"]
-                        # compute kl loss
-                        kld = kl_penalty(
-                            logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type
-                        )
-                        kl_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+                        logprobs_dp["ref_log_prob"].append(ref_log_prob.detach().cpu())
 
-                        policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
-                        micro_batch_metrics["actor/kl_loss"] = kl_loss.detach().item() * loss_scale_factor
-                        micro_batch_metrics["actor/kl_coef"] = self.config.kl_loss_coef
+                        kl_loss_update = self.config.get("kl_loss_update", False)
+                        if kl_loss_update:
+                            # compute kl loss
+                            kld = kl_penalty(
+                                logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=self.config.kl_loss_type
+                            )
+                            kl_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+                            policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
+                            micro_batch_metrics["actor/kl_loss"] = kl_loss.detach().item() * loss_scale_factor
+                            micro_batch_metrics["actor/kl_coef"] = self.config.kl_loss_coef
+                        micro_batch_metrics.update(
+                            {
+                                "actor/ref_log_prob": ref_log_prob.detach().mean().item(),
+                                "actor/delta_ref_log_prob": (log_prob - ref_log_prob).detach().mean().item(),
+                            }
+                        )
 
                     if self.config.use_dynamic_bsz:
                         # relative to the dynamic bsz
@@ -488,12 +514,25 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/pg_clipfrac": pg_clipfrac.detach().item(),
                             "actor/ppo_kl": ppo_kl.detach().item(),
                             "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+                            "actor/new_log_prob_entropy": entropy.detach().mean().item(),
+                            "actor/new_log_prob": log_prob.detach().mean().item(),
+                            "actor/old_log_prob": curr_old_log_prob.detach().mean().item(),
+                            "actor/delta_log_prob": (log_prob - curr_old_log_prob).detach().mean().item(),
                         }
                     )
+
                     append_to_dict(metrics, micro_batch_metrics)
 
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
         self.actor_optimizer.zero_grad()
-        return metrics
+
+        # 拼接所有收集到的结果，并包装为DataProto对象
+        dp_batch = {}
+        # 检查每个项是否有内容，拼接
+        for k, v in logprobs_dp.items():
+            if len(v) > 0:
+                dp_batch[k] = torch.cat(v, dim=0)
+        collect_logprobs = DataProto.from_single_dict(dp_batch)
+        return collect_logprobs, metrics
