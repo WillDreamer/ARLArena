@@ -36,9 +36,9 @@ actor_rollout_ref:
       model_dtype: fp32
       use_orig_params: false
       ulysses_sequence_parallel_size: 1
-      entropy_from_logits_with_chunking: false
-      use_torch_compile: true
-      entropy_checkpointing: false
+      # entropy_from_logits_with_chunking: false
+      # use_torch_compile: true
+      # entropy_checkpointing: false
       forward_only: false
       strategy: fsdp
     _target_: verl.workers.config.FSDPActorConfig
@@ -51,7 +51,7 @@ actor_rollout_ref:
     clip_ratio: 0.2
     clip_ratio_low: 0.2
     clip_ratio_high: 0.2
-    freeze_vision_tower: false
+    # freeze_vision_tower: false
     policy_loss:
       _target_: verl.workers.config.PolicyLossConfig
       loss_mode: vanilla
@@ -64,7 +64,7 @@ actor_rollout_ref:
     loss_agg_mode: token-mean
     entropy_coeff: 0
     use_kl_loss: false
-    use_torch_compile: true
+    # use_torch_compile: true
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_epochs: 1
@@ -106,11 +106,11 @@ actor_rollout_ref:
     grad_clip: 1.0
     ulysses_sequence_parallel_size: 1
     entropy_from_logits_with_chunking: false
-    entropy_checkpointing: false
+    # entropy_checkpointing: false
     use_remove_padding: ${oc.select:actor_rollout_ref.model.use_remove_padding,false}
   ref:
     strategy: ${actor_rollout_ref.actor.strategy}
-    use_torch_compile: ${oc.select:actor_rollout_ref.actor.use_torch_compile,true}
+    # use_torch_compile: ${oc.select:actor_rollout_ref.actor.use_torch_compile,true}
     log_prob_micro_batch_size: null
     log_prob_micro_batch_size_per_gpu: null
     log_prob_use_dynamic_bsz: ${oc.select:actor_rollout_ref.actor.use_dynamic_bsz,false}
@@ -153,15 +153,15 @@ actor_rollout_ref:
       model_dtype: fp32
       use_orig_params: false
       ulysses_sequence_parallel_size: 1
-      entropy_from_logits_with_chunking: false
-      use_torch_compile: true
-      entropy_checkpointing: false
+      # entropy_from_logits_with_chunking: false
+      # use_torch_compile: true
+      # entropy_checkpointing: false
       forward_only: false
       strategy: fsdp
     model: null
     ulysses_sequence_parallel_size: ${oc.select:actor_rollout_ref.actor.ulysses_sequence_parallel_size,1}
     entropy_from_logits_with_chunking: false
-    entropy_checkpointing: false
+    # entropy_checkpointing: false
   rollout:
     _target_: verl.workers.config.RolloutConfig
     name: ???
@@ -219,12 +219,12 @@ actor_rollout_ref:
       use_inference_chat_template: false
       tokenization_sanity_check_mode: strict
       format: hermes
-      num_repeat_rollouts: null
+      # num_repeat_rollouts: null
     calculate_log_probs: false
     agent:
       _target_: verl.workers.config.AgentLoopConfig
       num_workers: 8
-      default_agent_loop: single_turn_agent
+      default_agent_loop: verltool_agent
       agent_loop_config_path: null
       custom_async_server:
         _target_: verl.workers.config.CustomAsyncServerConfig
@@ -345,8 +345,8 @@ critic:
       use_orig_params: false
       ulysses_sequence_parallel_size: 1
       entropy_from_logits_with_chunking: false
-      use_torch_compile: true
-      entropy_checkpointing: false
+      # use_torch_compile: true
+      # entropy_checkpointing: false
       forward_only: false
       strategy: fsdp
     path: ~/models/deepseek-llm-7b-chat

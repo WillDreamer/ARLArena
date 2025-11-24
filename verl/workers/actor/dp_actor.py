@@ -452,7 +452,10 @@ class DataParallelPPOActor(BasePPOActor):
                     #* 收集micro_batch信息到logprobs_dp字典
                     logprobs_dp["log_prob"].append(log_prob.detach().cpu())
                     logprobs_dp["token_ids"].append(model_inputs["input_ids"].detach().cpu())
-                    logprobs_dp["entropy"].append(entropy.detach().cpu())
+                    if entropy is not None:
+                        logprobs_dp["entropy"].append(entropy.detach().cpu())
+                    else:
+                        logprobs_dp["entropy"].append(torch.zeros_like(log_prob))
 
                     if on_policy:
                         curr_old_log_prob = log_prob.detach()
