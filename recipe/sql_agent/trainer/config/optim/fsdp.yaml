@@ -39,7 +39,7 @@ num_cycles: 0.5
 # lr_scheduler_type: constant
 
 # deprecated
-warmup_style: null
+warmup_style: constant
 
 # Additional optimizer-specific keyword arguments
 # Example for torchao with bf16 stochastic rounding:

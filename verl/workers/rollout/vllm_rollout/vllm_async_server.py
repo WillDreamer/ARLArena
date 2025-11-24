@@ -765,6 +765,98 @@ class vLLMHttpServer(vLLMHttpServerBase):
     ):
         super().__init__(config, model_config, rollout_mode, workers, replica_rank, node_rank, gpus_per_node, nnodes)
 
+class vLLMReplica(RolloutReplica):
+    def __init__(
+        self,
+        replica_rank: int,
+        config: RolloutConfig | RewardModelConfig,
+        model_config: HFModelConfig,
+        gpus_per_node: int = 8,
+        is_reward_model: bool = False,
+    ):
+        super().__init__(replica_rank, config, model_config, gpus_per_node, is_reward_model)
+        self.server_class = vLLMHttpServer
+
+    def get_ray_class_with_init_args(self) -> RayClassWithInitArgs:
+        """Get rollout worker actor class for colocated and standalone mode."""
+        worker_dict_cls = RayClassWithInitArgs(
+            cls=_rollout_worker_actor_cls,
+            config=self.config,
+            model_config=self.model_config,
+            device_mesh=None,
+        )
+        return worker_dict_cls
+
+    async def launch_servers(self):
+        """Launch http server in each node."""
+        assert len(self.workers) == self.world_size, (
+            f"worker number {len(self.workers)} not equal to world size {self.world_size}"
+        )
+
+        # get node_id of all workers
+        worker_node_ids = await asyncio.gather(
+            *[
+                worker.__ray_call__.remote(lambda self: ray.get_runtime_context().get_node_id())
+                for worker in self.workers
+            ]
+        )
+
+        # For non-data parallel case, there's only one server whether it's single or multi nodes.
+        nnodes, gpus_per_node = self.nnodes, self.gpus_per_node
+        if self.config.data_parallel_size == 1:
+            nnodes = 1
+            gpus_per_node = self.world_size
+
+        # create server actor in each node with node affinity
+        for node_rank in range(nnodes):
+            workers = self.workers[node_rank * gpus_per_node : (node_rank + 1) * gpus_per_node]
+            node_id = worker_node_ids[node_rank * gpus_per_node]
+            name = (
+                f"vllm_server_{self.replica_rank}_{node_rank}"
+                if not self.is_reward_model
+                else f"vllm_server_reward_{self.replica_rank}_{node_rank}"
+            )
+            server = self.server_class.options(
+                scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
+                    node_id=node_id,
+                    soft=False,
+                ),
+                name=name,
+            ).remote(
+                config=self.config,
+                model_config=self.model_config,
+                rollout_mode=self.rollout_mode,
+                workers=workers,
+                replica_rank=self.replica_rank,
+                node_rank=node_rank,
+                gpus_per_node=gpus_per_node,
+                nnodes=nnodes,
+            )
+            self.servers.append(server)
+
+        # launch http server in each node
+        master_address, master_port = await self.servers[0].get_master_address.remote()
+        await asyncio.gather(
+            *[
+                server.launch_server.remote(master_address=master_address, master_port=master_port)
+                for server in self.servers
+            ]
+        )
+
+        # get http server address from first server
+        server_address, server_port = await self.servers[0].get_server_address.remote()
+        self._server_handle = self.servers[0]
+        self._server_address = (
+            f"[{server_address}]:{server_port}"
+            if is_valid_ipv6_address(server_address)
+            else f"{server_address}:{server_port}"
+        )
+
+    async def sleep(self):
+        """Sleep each rollout server."""
+        # Drain DP engines for safe sleep.
+        await self.servers[0].wait_for_requests_to_drain.remote()
+        await asyncio.gather(*[server.sleep.remote() for server in self.servers])
 
 _rollout_worker_actor_cls = ray.remote(vLLMAsyncRollout)
 

@@ -26,7 +26,7 @@ for file in current_dir.glob("*.py"):
         continue
     try:
         # import
-        module = __import__(f"verl_tool.workers.reward_manager.{file.stem}", fromlist=[file.stem])
+        module = __import__(f"recipe.sql_agent.workers.reward_manager.{file.stem}", fromlist=[file.stem])
     except ImportError as e:
         error_loaded_reward_manager[file.stem] = e
         pass

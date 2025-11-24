@@ -9,7 +9,7 @@ $(pwd)/datasets/${dataset_name}/test_spider_realistic.parquet]
 
 ulimit -n 1048576
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -53,6 +53,7 @@ mask_observations=True # mask observations for kl loss and gradient descent
 enable_mtrl=False # enable multi-turn training
 rollout_mode='async'
 
+
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
 run_name_postfix=""
 run_name="${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
@@ -66,7 +67,7 @@ export RAY_TMPDIR="/data2/whx/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
-action_stop_tokens_file="$(pwd)$(mktemp)"
+action_stop_tokens_file="$(mktemp)"
 echo -e -n "$action_stop_tokens" | tee $action_stop_tokens_file
 echo "action_stop_tokens_file=$action_stop_tokens_file"
 
@@ -145,7 +146,7 @@ PYTHONUNBUFFERED=1 python3 -m recipe.sql_agent.trainer.main_ppo \
     critic.ppo_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu \
     critic.ulysses_sequence_parallel_size=$ulysses_sequence_parallel_size \
     algorithm.kl_ctrl.kl_coef=$kl_coef \
-    trainer.logger=['console','wandb','tensorboard'] \
+    trainer.logger=['console','wandb'] \
     trainer.project_name=$reward_manager \
     trainer.experiment_name=$run_name \
     trainer.val_before_train=True \

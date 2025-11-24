@@ -99,6 +99,9 @@ class VerlToolvLLMHttpServer(vLLMHttpServerBase):
         stop_reason = final_res.outputs[0].stop_reason
         text = final_res.outputs[0].text
         finished = final_res.finished
+        if isinstance(stop_reason, int):
+            # 如果只是 Debug 用，可以直接转成 str
+            stop_reason = str(stop_reason)
 
         return VerlToolTokenOutput(token_ids=token_ids, log_probs=log_probs, finish_reason=finish_reason, stop_reason=stop_reason, text=text, finished=finished)
 
