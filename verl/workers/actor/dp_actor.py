@@ -455,6 +455,7 @@ class DataParallelPPOActor(BasePPOActor):
                     if entropy is not None:
                         logprobs_dp["entropy"].append(entropy.detach().cpu())
                     else:
+                        entropy = torch.zeros_like(log_prob)
                         logprobs_dp["entropy"].append(torch.zeros_like(log_prob))
 
                     if on_policy:
