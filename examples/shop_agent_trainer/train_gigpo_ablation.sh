@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -28,7 +28,7 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B-Base
+MODEL=Qwen/Qwen3-4B-Thinking-2507
 MODEL_SHORT="${MODEL##*/}"
 estimator="gigpo"
 project_name="ARLArena_webshop"
@@ -96,6 +96,8 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
+        algorithm.filter_groups.enable=True \
+        algorithm.filter_groups.max_num_gen_batches=2 \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
