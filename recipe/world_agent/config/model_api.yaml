@@ -1,0 +1,22 @@
+# recipe/world_agent/config/model_api.yaml
+model_config:
+  model_name: gpt-4o-mini        # 默认用的 API 模型，可在命令行覆盖
+  max_concurrency: 20             # 同时发起的请求数
+
+model_info:
+  gpt-4o-mini:
+    provider_name: openai         # 使用 OpenAI provider
+    model_name: gpt-4o-mini
+    generation_kwargs:
+      temperature: 0.7
+      max_tokens: 512
+      top_p: 0.9
+  
+  gpt-4o:
+    provider_name: openai
+    model_name: gpt-4o
+    generation_kwargs:
+      temperature: 0.7
+      max_tokens: 512
+      top_p: 0.9
+
