@@ -20,7 +20,7 @@ mkdir -p "$RAY_TMPDIR"
 
 ROLLOUT_MODE="sync"
 PORT=$(( ( RANDOM % 10000 +1000) ))
-ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7778 --include-dashboard=true
 
 num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 train_data_size=16
@@ -28,7 +28,7 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B-Instruct-2507
+MODEL=Qwen/Qwen3-4B-Base
 MODEL_SHORT="${MODEL##*/}"
 estimator="gigpo"
 project_name="ARLArena_webshop"

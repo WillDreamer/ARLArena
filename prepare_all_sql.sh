@@ -50,7 +50,7 @@ python3 -m uv pip install func_timeout
 python3 -m uv pip install torch==2.8.0
 python3 -m uv pip install torchvision==0.21.0
 python3 -m uv pip install flash-attn==2.8.1 --no-build-isolation
-python3 -m uv pip install "vllm==0.10.4"
+python3 -m uv pip install "vllm==0.10.0"
 
 
 python -m pip uninstall -y opentelemetry-sdk opentelemetry-api opentelemetry-exporter-otlp opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-otlp-proto-http || true
