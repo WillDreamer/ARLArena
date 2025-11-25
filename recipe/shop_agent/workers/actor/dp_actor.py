@@ -320,6 +320,8 @@ class DataParallelPPOActor(BasePPOActor):
                     calculate_entropy = False
                     if entropy_coeff != 0:
                         calculate_entropy = True
+                    
+                    # new log prob entropy
                     entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy)
 
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = compute_policy_loss(
@@ -364,6 +366,9 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/pg_clipfrac": pg_clipfrac.detach().item(),
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+                        "actor/new_log_prob_entropy": entropy.detach().mean().item(),
+                        "actor/new_log_prob": log_prob.detach().mean().item(),
+                        "actor/old_log_prob": old_log_prob.detach().mean().item(),
                     }
                     if entropy_coeff != 0:
                         data["actor/entropy_loss"] = entropy_loss.detach().item()

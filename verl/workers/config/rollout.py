@@ -67,6 +67,7 @@ class AgentLoopConfig(BaseConfig):
     num_workers: int = 8
     agent_loop_config_path: Optional[str] = None
     custom_async_server: CustomAsyncServerConfig = field(default_factory=CustomAsyncServerConfig)
+    default_agent_loop: str = "verltool_agent"
 
 
 @dataclass
@@ -116,6 +117,12 @@ class RolloutConfig(BaseConfig):
     free_cache_engine: bool = True
     tensor_model_parallel_size: int = 2
     max_num_batched_tokens: int = 8192
+    data_parallel_size: int = 1
+    expert_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 1
+    enable_prefix_caching: bool = True
+    skip_tokenizer_init: bool = True
+    
 
     # TODO: enable train_kwargs
     # train_sampling_config: SamplingConfig = field(default_factory=SamplingConfig)

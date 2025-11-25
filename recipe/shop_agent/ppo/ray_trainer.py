@@ -210,10 +210,40 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.EMPG:
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+        advantages, returns = core_algos.compute_EMPG_advantage(
+            batch=data,
+            )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
     else:
         raise NotImplementedError
     return data
 
+#* Newly added metrics
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
 
 class AdvantageEstimator(str, Enum):
     """
@@ -228,6 +258,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    EMPG = 'empg'
 
 class ShopAgentTrainer(RayPPOTrainer):
     """
@@ -265,18 +296,34 @@ class ShopAgentTrainer(RayPPOTrainer):
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
 
         n = len(inputs)
+        # Only add log_probs, old_log_probs, entropy, ref_log_probs to base_data if they are not None
         base_data = {
             "input": inputs,
             "output": outputs,
             "score": scores,
             "step": [self.global_steps] * n,
         }
+
+        #* Newly added metrics
+        analysis_data = {}
+        if input_ids_list is not None:
+            analysis_data["input_ids"] = to_jsonable(input_ids_list)
+        if output_ids_list is not None:
+            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        if log_probs is not None:
+            analysis_data["log_probs"] = to_jsonable(log_probs)
+        if old_log_probs is not None:
+            analysis_data["old_log_probs"] = to_jsonable(old_log_probs)
+        if entropy is not None:
+            analysis_data["entropy"] = to_jsonable(entropy)
+        if ref_log_probs is not None:
+            analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
 
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
@@ -286,6 +333,10 @@ class ShopAgentTrainer(RayPPOTrainer):
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if analysis_data is not None:
+                for j in range(log_probs.shape[0]):
+                    entry = {k: v[j] for k, v in analysis_data.items()}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         print(f"Dumped generations to {filename}")
 
@@ -800,6 +851,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
@@ -874,7 +926,6 @@ class ShopAgentTrainer(RayPPOTrainer):
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
                         # compute advantages, executed on the driver process
-
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
                         batch = compute_advantage(
@@ -918,11 +969,30 @@ class ShopAgentTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            #* Newly added metrics
+                            input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            output_ids_list = batch.batch["responses"].cpu().tolist()
+                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+
+                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            else:
+                                ref_log_probs = None
+
+                            #* Newly added metrics 
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
+                                input_ids_list=input_ids_list,
+                                output_ids_list=output_ids_list,
+                                log_probs=log_probs,
+                                old_log_probs=old_log_probs,
+                                entropy=entropy,
+                                ref_log_probs=ref_log_probs,
                                 dump_path=rollout_data_dir,
                             )
                     

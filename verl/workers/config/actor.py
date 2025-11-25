@@ -110,6 +110,7 @@ class ActorConfig(BaseConfig):
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
     kl_loss_type: str = "low_var_kl"
+    kl_loss_update: bool = False  # whether to update kl loss during training
     ppo_epochs: int = 1
     shuffle: bool = False
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
