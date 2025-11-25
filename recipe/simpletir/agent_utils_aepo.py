@@ -140,26 +140,21 @@ class GenerationConfig:
     rollout_n: int
     mask_void_turns: bool
     append_final_answer_func: bool
-    # Shared ARPO/AEPO controls
-    entropy_weight: float = 0.5
-    branch_probability: float = 0.5
-    initial_rollouts: int = 1
-    logprobs: int = 10
+    # AEPO parameters
+    entropy_weight: float = 0.5  # Weight for entropy in branching decision
+    branch_probability: float = 0.5  # Base probability threshold for branching
+    initial_rollouts: int = 1  # Initial number of rollouts (if different from rollout_n)
+    beam_size: int = 2  # Maximum branches to create from one sample
+    logprobs: int = 10  # Number of top logprobs to request from generation
     # AEPO-specific knobs
     enable_dynamic_rollouts: bool = False
     initial_entropy_tokens: int = 50
     dynamic_rollout_min: int = 1
     dynamic_rollout_max: Optional[int] = None
     consecutive_branch_penalty: float = 0.05
-    # ARPO Entropy parameters
-    entropy_weight: float = 0.5  # Weight for entropy in branching decision
-    branch_probability: float = 0.5  # Base probability threshold for branching
-    initial_rollouts: Optional[int] = None  # Initial number of rollouts (if different from rollout_n)
-    beam_size: int = 2  # Maximum branches to create from one sample
-    logprobs: int = 10  # Number of top logprobs to request from generation
 
 
-class AgentHelperAEPO:
+class AgentHelper:
     def __init__(
         self,
         tokenizer,
@@ -254,23 +249,32 @@ class AgentHelperAEPO:
                     sample_logprobs = logprobs_data[sample_idx]
                     
                     # Handle different logprob formats
-                    token_logprobs = []
+                    # Calculate entropy per token, then average (more accurate than joint entropy)
+                    token_entropies = []
                     if isinstance(sample_logprobs, list):
                         for lp_item in sample_logprobs[:20]:  # First 20 tokens
+                            token_logprobs = []
                             if isinstance(lp_item, dict):
                                 # Format: {token_id: LogprobInfo}
-                                token_logprobs.extend([
+                                token_logprobs = [
                                     lp.logprob if hasattr(lp, 'logprob') else lp
                                     for lp in lp_item.values()
-                                ])
+                                ]
                             elif hasattr(lp_item, 'logprob'):
-                                token_logprobs.append(lp_item.logprob)
+                                token_logprobs = [lp_item.logprob]
                             elif isinstance(lp_item, (int, float)):
-                                token_logprobs.append(float(lp_item))
+                                token_logprobs = [float(lp_item)]
+                            
+                            # Calculate entropy for this token position
+                            if token_logprobs:
+                                token_entropy = self._calc_entropy(token_logprobs)
+                                token_entropies.append(token_entropy)
                     
-                    if token_logprobs:
-                        entropy = self._calc_entropy(token_logprobs) / entropy_norm_factor
-                        return entropy
+                    # Average token-level entropies and normalize
+                    if token_entropies:
+                        avg_entropy = sum(token_entropies) / len(token_entropies)
+                        normalized_entropy = avg_entropy / entropy_norm_factor
+                        return normalized_entropy
         
         # Fallback: try to extract from responses if available
         # This is a placeholder - you may need to adjust based on your actual output format
@@ -308,43 +312,123 @@ class AgentHelperAEPO:
         data_proto.meta_info["sampling_params"] = sampling_params
 
     def _calculate_dynamic_initial_rollouts(self, gen_batch: DataProto) -> List[int]:
+        """
+        Calculate initial rollouts per sample by generating full trajectories
+        and averaging entropy across all turns. Processes entire batch in parallel.
+        """
         batch_size = gen_batch.batch["input_ids"].shape[0]
         default_rollouts = [self.initial_rollouts] * batch_size
         if not self.enable_dynamic_rollouts:
             return default_rollouts
 
         try:
+            vocab_size = len(self.tokenizer)
+            initial_entropy_tokens = self.config.initial_entropy_tokens
+            
+            # Step 1: Calculate initial entropy (H_root) for all samples in parallel
             probe_batch = self._clone_dataproto(gen_batch)
             self._prepare_sampling_meta(
                 probe_batch,
-                max_tokens=max(1, self.initial_entropy_tokens),
+                max_tokens=max(1, initial_entropy_tokens),
                 n=1,
             )
-            probe_output = self._generate_with_gpu_padding(probe_batch)
+            initial_output = self._generate_with_gpu_padding(probe_batch)
+            
+            # Extract initial entropy (H_root) for each sample
+            initial_entropies = []
+            for sample_idx in range(batch_size):
+                initial_entropy = self._get_entropy_from_output(initial_output, sample_idx, vocab_size=vocab_size)
+                initial_entropies.append(max(0.0, min(1.0, initial_entropy)))
+            
+            # Step 2: Execute tool invocation inference flow in parallel
+            # Initialize state for all samples in parallel
+            rollings = self._clone_dataproto(gen_batch)
+            active_mask = torch.ones(batch_size, dtype=torch.bool)
+            
+            # Track step entropy per sample (H_high)
+            step_entropies_list = [[] for _ in range(batch_size)]
+            
+            # Generate full trajectories for all samples in parallel
+            for step in range(self.config.max_turns):
+                if not active_mask.sum():
+                    break
+                
+                rollings.batch = self.tensor_fn.cut_to_effective_len(
+                    rollings.batch, keys=["input_ids", "attention_mask", "position_ids"]
+                )
+                
+                # Generate for all active samples in parallel
+                rollings_active = DataProto.from_dict(
+                    {k: v[active_mask] for k, v in rollings.batch.items()}
+                )
+                rollings_active.meta_info = deepcopy(rollings.meta_info)
+                
+                # Explicitly set n=1 for probe generation (one sample per batch item)
+                self._prepare_sampling_meta(rollings_active, n=1)
+                
+                gen_output = self._generate_with_gpu_padding(rollings_active)
+                
+                # Extract entropy for each active sample
+                active_indices_list = torch.where(active_mask)[0].tolist()
+                for i, sample_idx in enumerate(active_indices_list):
+                    entropy = self._get_entropy_from_output(gen_output, i, vocab_size=vocab_size)
+                    step_entropies_list[sample_idx].append(entropy)
+                
+                # Post-process responses
+                responses_ids, responses_str = self._postprocess_responses(
+                    gen_output.batch["responses"]
+                )
+                responses_ids, responses_str = self.tensor_fn._example_level_pad(
+                    responses_ids, responses_str, active_mask
+                )
+                
+                # Execute code and get next inputs
+                next_obs, dones, is_void_turn, code_info = self.execute_predictions(
+                    responses_str, active_mask
+                )
+                
+                curr_active_mask = torch.tensor(
+                    [not done for done in dones], dtype=torch.bool
+                )
+                active_mask = active_mask * curr_active_mask
+                
+                if not active_mask.sum():
+                    break
+                
+                if step < self.config.max_turns - 1:
+                    if step == self.config.max_turns - 2:
+                        for i, obs in enumerate(next_obs):
+                            if len(obs) > 0:
+                                next_obs[i] += self.prompt_dict["final_prompt"]
+                    
+                    next_obs_ids = self._process_next_obs(next_obs)
+                    rollings = self._update_rolling_state(rollings, responses_ids, next_obs_ids)
+            
+            # Step 3: Calculate initial_rollouts using H_root and H_high (matching original AEPO)
+            rollouts = []
+            num_samples = self.config.rollout_n
+            for i in range(batch_size):
+                # Calculate average step entropy (H_high)
+                if step_entropies_list[i]:
+                    avg_step_entropy = sum(step_entropies_list[i]) / len(step_entropies_list[i])
+                else:
+                    # If no step entropy, use initial entropy as fallback
+                    avg_step_entropy = initial_entropies[i]
+                
+                # Calculate initial_rollouts using original AEPO formula
+                entropy_diff = initial_entropies[i] - avg_step_entropy
+                sigmoid_input = 0.5 * entropy_diff
+                sigmoid_value = 1.0 / (1.0 + math.exp(-sigmoid_input))
+                
+                # Round up
+                initial_rollouts = int(num_samples * sigmoid_value) + 1
+                initial_rollouts = max(1, min(initial_rollouts, num_samples))
+                
+                rollouts.append(initial_rollouts)
+            
         except Exception as exc:
             logger.warning("Dynamic rollout probing failed: %s", exc)
             return default_rollouts
-
-        vocab_size = len(self.tokenizer)
-        entropy_estimates = []
-        for sample_idx in range(batch_size):
-            entropy = self._get_entropy_from_output(
-                probe_output, sample_idx, vocab_size=vocab_size
-            )
-            entropy_estimates.append(max(0.0, min(1.0, entropy)))
-
-        rollouts = []
-        max_rollouts_allowed = min(self.dynamic_rollout_max, self.config.rollout_n)
-        for entropy_value in entropy_estimates:
-            entropy_centered = entropy_value - 0.5
-            sigmoid_value = 1.0 / (1.0 + math.exp(-2.0 * entropy_centered))
-            desired = int(
-                round(
-                    self.dynamic_rollout_min
-                    + (max_rollouts_allowed - self.dynamic_rollout_min) * sigmoid_value
-                )
-            )
-            rollouts.append(max(self.dynamic_rollout_min, min(desired, max_rollouts_allowed)))
 
         return rollouts
 
@@ -485,7 +569,7 @@ class AgentHelperAEPO:
     def _generate_with_gpu_padding(self, active_batch: DataProto) -> DataProto:
         """
         Wrapper for generation that handles multi-GPU padding requirements.
-        ARPO Entropy: Also requests logprobs for entropy calculation.
+        AEPO: Also requests logprobs for entropy calculation.
         
         if num_gpus <= 1, return self.actor_rollout_wg.generate_sequences(active_batch)
         if active_batch size is not divisible by num_gpus, pad with first sequence
@@ -567,29 +651,6 @@ class AgentHelperAEPO:
         """
         return rollout_idx // self.config.rollout_n
 
-    def _should_branch_based_on_entropy(
-        self,
-        entropy_now: float,
-        entropy_init: float,
-    ) -> bool:
-        """
-        ARPO Entropy: Decide whether to branch based on entropy delta.
-        
-        Args:
-            entropy_now: Current entropy value
-            entropy_init: Initial entropy value
-            
-        Returns:
-            True if should branch, False otherwise
-        """
-        entropy_delta = entropy_now - entropy_init
-        prob = random.random() - self.entropy_weight * entropy_delta
-        prob = max(0.0, min(1.0, prob))
-        
-        # If prob > branch_probability, skip branching (model is confident)
-        # If prob <= branch_probability, do branching (model is uncertain)
-        return prob <= self.branch_probability
-
     def _should_branch_aepo(
         self, entropy_now: float, entropy_init: float, sample_idx: int
     ) -> bool:
@@ -619,9 +680,10 @@ class AgentHelperAEPO:
         timeout: int = 5,
     ) -> Tuple[Dict, Dict]:
         """
-        Run main LLM generation loop with ARPO entropy-based adaptive branching.
+        Run main LLM generation loop with AEPO entropy-based adaptive branching.
         """
-        batch_size = gen_batch.batch["input_ids"].shape[0]
+        original_batch_size = gen_batch.batch["input_ids"].shape[0]
+        batch_size = original_batch_size  # Keep for compatibility, but use original_batch_size for final size check
 
         self.timeout = timeout
 
@@ -635,6 +697,8 @@ class AgentHelperAEPO:
 
         self.initial_entropy_dict = {}
         rollouts_per_sample = self._calculate_dynamic_initial_rollouts(gen_batch)
+        
+        
         initial_rollout_plan = list(rollouts_per_sample)
         repeat_counts = torch.tensor(
             rollouts_per_sample,
@@ -642,6 +706,10 @@ class AgentHelperAEPO:
             dtype=torch.long,
         )
         total_rollouts = int(repeat_counts.sum().item())
+        
+        # Final check: ensure we don't exceed budget
+        if total_rollouts > total_budget:
+            raise ValueError(f"Initial rollouts ({total_rollouts}) exceed total budget ({total_budget})")
 
         if total_rollouts == 0:
             raise ValueError("Dynamic rollout calculation produced zero rollouts.")
@@ -672,7 +740,6 @@ class AgentHelperAEPO:
         fail_code_strip_lines = []
         active_num_list = [active_mask.sum().item()]
         current_entropy_dict: Dict[int, float] = {}
-        branching_decisions_per_step: Dict[int, Dict[int, bool]] = {}
         vocab_size = len(self.tokenizer)
         entropy_norm_factor = math.log(vocab_size)
 
@@ -701,7 +768,7 @@ class AgentHelperAEPO:
 
             gen_output = self._generate_with_gpu_padding(rollings_active)
             
-            # ARPO Entropy: Calculate entropy for each active sample
+            # AEPO: Calculate entropy for each active sample
             active_indices_list = torch.where(active_mask)[0].tolist()
             for i, rollout_idx in enumerate(active_indices_list):
                 entropy = self._get_entropy_from_output(gen_output, i, vocab_size)
@@ -710,15 +777,6 @@ class AgentHelperAEPO:
                 # Store initial entropy on first generation for this rollout
                 if rollout_idx not in self.initial_entropy_dict:
                     self.initial_entropy_dict[rollout_idx] = entropy
-                else:
-                    # ARPO Entropy: Check if should branch based on entropy change
-                    # This provides monitoring/analysis of when branching would occur
-                    entropy_init = self.initial_entropy_dict[rollout_idx]
-                    should_branch = self._should_branch_based_on_entropy(entropy, entropy_init)
-                    # Store branching decision for logging (could be used for dynamic branching later)
-                    if step not in branching_decisions_per_step:
-                        branching_decisions_per_step[step] = {}
-                    branching_decisions_per_step[step][rollout_idx] = should_branch
 
             # Post-process responses
             meta_info = gen_output.meta_info
@@ -762,15 +820,10 @@ class AgentHelperAEPO:
                 original_right_side, responses_ids, next_obs_ids
             )
 
-            # ARPO Entropy: Create new trajectories to satisfy budget M when needed
+            # AEPO: Create new trajectories to satisfy budget M when needed
             if step < self.config.max_turns - 1:  # Only create new rollouts if not last step
-                final_active_indices = []
-                for idx in next_active_indices:
-                    response_len = len(rollings.batch["input_ids"][idx]) - len(
-                        original_left_side["input_ids"][idx]
-                    )
-                    if response_len < self.config.max_response_length:
-                        final_active_indices.append(idx)
+                next_active_indices = torch.where(active_mask)[0].tolist()
+                final_active_indices = next_active_indices
 
                 # Separate active indices by original sample
                 active_by_sample: Dict[int, List[int]] = {}
@@ -787,17 +840,15 @@ class AgentHelperAEPO:
                 
                 current_num_rollouts = len(active_mask)
                 
-                # Branch from active trajectories using entropy-based decision
+                # Branch from active trajectories using entropy-based decision (per-sample budget only)
                 for orig_sample, active_idxs in active_by_sample.items():
+                    # Per-sample budget: remaining_slots = rollout_n - current_rollouts_for_sample
                     remaining_slots = self.config.rollout_n - rollouts_per_sample[orig_sample]
                     if remaining_slots <= 0:
                         continue
                     
                     branches_created = 0
                     for source_idx in active_idxs:
-                        if branches_created >= remaining_slots:
-                            break
-                        
                         branches_per_idx = min(self.beam_size - 1, remaining_slots - branches_created)
                         if branches_per_idx <= 0:
                             break
@@ -834,91 +885,94 @@ class AgentHelperAEPO:
                         if branches_created >= remaining_slots:
                             break
                 
-                # Create new rollouts for samples that have no active rollouts but need more
-                for orig_sample in range(batch_size):
+                # Add new rollouts for samples that have no active rollouts but need more
+                for orig_sample in range(original_batch_size):
                     if orig_sample not in active_by_sample and rollouts_per_sample[orig_sample] < self.config.rollout_n:
-                        # Sample has no active rollouts but still needs more
-                        branches_to_add = min(1, self.config.rollout_n - rollouts_per_sample[orig_sample])
+                        # Sample has no active rollouts but still needs more (per-sample budget only)
+                        branches_to_add = min(
+                            1, 
+                            self.config.rollout_n - rollouts_per_sample[orig_sample]
+                        )
                         
-                        current_indices = sample_to_indices.get(orig_sample, [])
-                        source_idx = None
-                        for candidate in current_indices:
-                            if candidate < len(active_mask) and active_mask[candidate]:
-                                source_idx = candidate
-                                break
+                        if branches_to_add > 0:
+                            current_indices = sample_to_indices.get(orig_sample, [])
+                            source_idx = None
+                            for candidate in current_indices:
+                                if candidate < len(active_mask) and active_mask[candidate]:
+                                    source_idx = candidate
+                                    break
 
-                        if source_idx is not None:
-                            new_rollout_input_ids.append(
-                                rollings.batch["input_ids"][source_idx].clone()
-                            )
-                        else:
-                            new_rollout_input_ids.append(base_left_inputs[orig_sample].clone())
+                            if source_idx is not None:
+                                new_rollout_input_ids.append(
+                                    rollings.batch["input_ids"][source_idx].clone()
+                                )
+                            else:
+                                new_rollout_input_ids.append(base_left_inputs[orig_sample].clone())
 
-                        empty_responses = torch.zeros_like(original_right_side["responses"][0])
-                        new_rollout_responses.append(empty_responses)
-                        new_rollout_responses_mask.append(empty_responses.clone())
-                        new_rollout_sample_origins.append(orig_sample)
+                            empty_responses = torch.zeros_like(original_right_side["responses"][0])
+                            new_rollout_responses.append(empty_responses)
+                            new_rollout_responses_mask.append(empty_responses.clone())
+                            new_rollout_sample_origins.append(orig_sample)
 
-                        new_idx = current_num_rollouts + len(new_rollout_indices)
-                        new_rollout_indices.append(new_idx)
+                            new_idx = current_num_rollouts + len(new_rollout_indices)
+                            new_rollout_indices.append(new_idx)
 
-                        sample_to_indices.setdefault(orig_sample, []).append(new_idx)
-                        index_to_sample.append(orig_sample)
-                        rollouts_per_sample[orig_sample] += 1
-                
-                # Add new rollouts to the batch
-                if new_rollout_indices:
-                    # Extend rollings
-                    new_input_ids = torch.stack([new_rollout_input_ids[i] for i in range(len(new_rollout_input_ids))])
-                    new_attention_mask = self.tensor_fn.create_attention_mask(new_input_ids)
-                    new_position_ids = self.tensor_fn.create_position_ids(new_attention_mask)
+                            sample_to_indices.setdefault(orig_sample, []).append(new_idx)
+                            index_to_sample.append(orig_sample)
+                            rollouts_per_sample[orig_sample] += 1
                     
-                    rollings.batch["input_ids"] = torch.cat([rollings.batch["input_ids"], new_input_ids], dim=0)
-                    rollings.batch["attention_mask"] = torch.cat([rollings.batch["attention_mask"], new_attention_mask], dim=0)
-                    rollings.batch["position_ids"] = torch.cat([rollings.batch["position_ids"], new_position_ids], dim=0)
-                    
-                    # Extend original_right_side - all responses should already have the same shape
-                    new_responses = torch.stack([new_rollout_responses[i] for i in range(len(new_rollout_responses))])
-                    new_responses_mask = torch.stack([new_rollout_responses_mask[i] for i in range(len(new_rollout_responses_mask))])
-                    
-                    original_right_side["responses"] = torch.cat([original_right_side["responses"], new_responses], dim=0)
-                    original_right_side["responses_with_info_mask"] = torch.cat([original_right_side["responses_with_info_mask"], new_responses_mask], dim=0)
-                    
-                    # Extend original_left_side (duplicate if needed)
-                    if len(new_rollout_indices) > 0:
-                        # For new rollouts, use the original left side from their source sample
-                        new_left_side_input_ids = []
-                        for orig_sample in new_rollout_sample_origins:
-                            new_left_side_input_ids.append(base_left_inputs[orig_sample].clone())
+                    # Add new rollouts to the batch
+                    if new_rollout_indices:
+                        # Extend rollings
+                        new_input_ids = torch.stack([new_rollout_input_ids[i] for i in range(len(new_rollout_input_ids))])
+                        new_attention_mask = self.tensor_fn.create_attention_mask(new_input_ids)
+                        new_position_ids = self.tensor_fn.create_position_ids(new_attention_mask)
                         
-                        if new_left_side_input_ids:
-                            new_left_side = torch.stack(new_left_side_input_ids)
-                            original_left_side["input_ids"] = torch.cat([original_left_side["input_ids"], new_left_side], dim=0)
-                    
-                    self._update_consecutive_branch_counter(new_rollout_sample_origins, batch_size)
+                        rollings.batch["input_ids"] = torch.cat([rollings.batch["input_ids"], new_input_ids], dim=0)
+                        rollings.batch["attention_mask"] = torch.cat([rollings.batch["attention_mask"], new_attention_mask], dim=0)
+                        rollings.batch["position_ids"] = torch.cat([rollings.batch["position_ids"], new_position_ids], dim=0)
+                        
+                        # Extend original_right_side - all responses should already have the same shape
+                        new_responses = torch.stack([new_rollout_responses[i] for i in range(len(new_rollout_responses))])
+                        new_responses_mask = torch.stack([new_rollout_responses_mask[i] for i in range(len(new_rollout_responses_mask))])
+                        
+                        original_right_side["responses"] = torch.cat([original_right_side["responses"], new_responses], dim=0)
+                        original_right_side["responses_with_info_mask"] = torch.cat([original_right_side["responses_with_info_mask"], new_responses_mask], dim=0)
+                        
+                        # Extend original_left_side (duplicate if needed)
+                        if len(new_rollout_indices) > 0:
+                            # For new rollouts, use the original left side from their source sample
+                            new_left_side_input_ids = []
+                            for orig_sample in new_rollout_sample_origins:
+                                new_left_side_input_ids.append(base_left_inputs[orig_sample].clone())
+                            
+                            if new_left_side_input_ids:
+                                new_left_side = torch.stack(new_left_side_input_ids)
+                                original_left_side["input_ids"] = torch.cat([original_left_side["input_ids"], new_left_side], dim=0)
+                        
+                        self._update_consecutive_branch_counter(new_rollout_sample_origins, original_batch_size)
 
-                    # Extend all tracking arrays
-                    new_active_mask = torch.ones(len(new_rollout_indices), dtype=torch.bool)
-                    active_mask = torch.cat([active_mask, new_active_mask], dim=0)
-                    
-                    new_void_turn_mask = torch.ones(len(new_rollout_indices), dtype=torch.bool)
-                    void_turn_mask = torch.cat([void_turn_mask, new_void_turn_mask], dim=0)
-                    
-                    new_turns_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
-                    turns_stats = torch.cat([turns_stats, new_turns_stats], dim=0)
-                    
-                    new_use_code_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
-                    use_code_stats = torch.cat([use_code_stats, new_use_code_stats], dim=0)
-                    
-                    new_valid_code_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
-                    valid_code_stats = torch.cat([valid_code_stats, new_valid_code_stats], dim=0)
-                    
-                    # Initialize entropy for new rollouts (will be set on next generation)
-                    active_num_list.append(active_mask.sum().item())
+                        # Extend all tracking arrays
+                        new_active_mask = torch.ones(len(new_rollout_indices), dtype=torch.bool)
+                        active_mask = torch.cat([active_mask, new_active_mask], dim=0)
+                        
+                        new_void_turn_mask = torch.ones(len(new_rollout_indices), dtype=torch.bool)
+                        void_turn_mask = torch.cat([void_turn_mask, new_void_turn_mask], dim=0)
+                        
+                        new_turns_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
+                        turns_stats = torch.cat([turns_stats, new_turns_stats], dim=0)
+                        
+                        new_use_code_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
+                        use_code_stats = torch.cat([use_code_stats, new_use_code_stats], dim=0)
+                        
+                        new_valid_code_stats = torch.zeros(len(new_rollout_indices), dtype=torch.int)
+                        valid_code_stats = torch.cat([valid_code_stats, new_valid_code_stats], dim=0)
+                        
+                        # Initialize entropy for new rollouts (will be set on next generation)
+                        active_num_list.append(active_mask.sum().item())
 
         # Add entropy statistics to meta_info
         entropy_stats = {}
-        branching_decisions_all = {}  # Track branching decisions across all steps
         for rollout_idx in self.initial_entropy_dict.keys():
             entropy_init = self.initial_entropy_dict.get(rollout_idx, 0.0)
             entropy_now = current_entropy_dict.get(rollout_idx, 0.0)
@@ -926,7 +980,6 @@ class AgentHelperAEPO:
             
             sample_idx = index_to_sample[rollout_idx] if rollout_idx < len(index_to_sample) else 0
             should_branch = self._should_branch_aepo(entropy_now, entropy_init, sample_idx)
-            branching_decisions_all[rollout_idx] = should_branch
             
             entropy_stats[rollout_idx] = {
                 "initial_entropy": entropy_init,
@@ -945,11 +998,35 @@ class AgentHelperAEPO:
         meta_info["success_code_strip_lines"] = success_code_strip_lines
         meta_info["fail_code_strip_lines"] = fail_code_strip_lines
         meta_info["entropy_stats"] = entropy_stats
-        meta_info["branching_decisions_per_step"] = branching_decisions_per_step  # Track branching decisions across all steps
         meta_info["initial_rollout_plan"] = initial_rollout_plan
         meta_info["final_rollout_plan"] = rollouts_per_sample
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
+        
+        # Extract token-level entropy from logprobs if available in meta_info
+        # Store it in original_right_side so it can be passed to advantage computation
+        if 'logprobs' in meta_info and meta_info['logprobs']:
+            # Try to extract token-level entropy from logprobs
+            # Note: In original AEPO, entropy is computed from logits during actor update,
+            # but we can extract from logprobs here if available for early use
+            batch_size = original_right_side["responses"].shape[0]
+            response_length = original_right_side["responses"].shape[1]
+            # Initialize entropy tensor with zeros
+            token_entropy = torch.zeros((batch_size, response_length), dtype=torch.float32, device=original_right_side["responses"].device)
+            
+            # Extract entropy from logprobs for each sample
+            logprobs_data = meta_info['logprobs']
+            vocab_size = len(self.tokenizer)
+            entropy_norm_factor = math.log(vocab_size)
+            
+            # If logprobs are stored as a list, try to extract token-level entropy
+            # This is a simplified extraction - in practice, entropy should be computed from logits
+            # during actor update for accurate token-level entropy
+            if isinstance(logprobs_data, list) and len(logprobs_data) > 0:
+                # For now, set to zeros - proper extraction requires detailed logprob structure
+                # Entropy will be computed from logits during actor update (as in original AEPO)
+                pass
+        
         return self._compose_final_output(
             original_left_side, original_right_side, void_turn_mask, meta_info
         )
