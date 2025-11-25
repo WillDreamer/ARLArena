@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(2 3 5 6)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -28,10 +28,11 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 estimator="gigpo"
 project_name="ARLArena_webshop"
+max_response_length=500
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
@@ -51,7 +52,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic_len_900"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic_len_${max_response_length}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -61,7 +62,7 @@ do
         data.train_batch_size=$train_data_size \
         data.val_batch_size=$val_data_size \
         data.max_prompt_length=4096 \
-        data.max_response_length=900 \
+        data.max_response_length=${max_response_length} \
         data.filter_overlong_prompts=True \
         data.truncation='error' \
         data.return_raw_chat=True \

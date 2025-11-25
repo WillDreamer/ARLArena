@@ -392,6 +392,56 @@ def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_ba
 
     return advantages, returns
 
+def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
+    """
+    Args:
+        tokenizer: The tokenizer for identifying response segments.
+        batch: A data batch with 'responses', 'old_entropy', 'advantages'.
+        k (float): Hyperparameter for self-calibrating gradient scaling.
+        k_f (float): Hyperparameter for the future clarity bonus.
+        zeta (float): Hyperparameter for the future clarity bonus.
+    """
+
+    # --- 1. Calculate Modulated Advantage Components ---
+    H = np.array(batch.batch['old_entropy'])
+    
+    # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
+    min_H, max_H = np.min(H), np.max(H)
+    H_norm = (H - min_H) / (max_H - min_H + 1e-8)
+
+    # Self-calibrating gradient scaling g(H) (Eq. 10)
+    g_H_unnormalized = np.exp(-k * H_norm)
+    mean_g_H = np.mean(g_H_unnormalized)
+    g_H = g_H_unnormalized / (mean_g_H + 1e-8)
+    
+    # Future clarity bonus f(H) (Eq. 11)
+    f_H = np.exp(-k_f * H_norm)
+
+    # Convert to tensors for PyTorch operations
+    g_H = torch.tensor(g_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+    f_H = torch.tensor(f_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+
+    # --- 2. Second Pass: Apply Advantage Modulation (Eq. 8) ---
+    step_advantages = []
+    for i, segment in enumerate(segments_to_modify):
+        idx, start, end = segment['sample_idx'], segment['start'], segment['end']
+        
+        # Apply self-calibrating gradient scaling
+        batch.batch['advantages'] *= g_H[i]
+        
+        # Add future clarity bonus if there is a next step
+        next_seg = segments_to_modify[i+1] if i+1 < len(segments_to_modify) else None
+        if next_seg and next_seg['sample_idx'] == idx:
+            batch.batch['advantages'][idx][start:end] += zeta * f_H[i+1]
+        step_advantages.append(batch.batch['advantages'][idx][start])
+            
+    # --- 3. Final Advantage Normalization (Eq. 7) ---
+    if step_advantages:
+        final_adv_mean = torch.mean(torch.stack(step_advantages))
+        batch.batch['advantages'] -= final_adv_mean
+
+    return batch.batch['advantages'], batch.batch['advantages']
+
 
 def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
     kl = old_log_prob - ref_log_prob
@@ -753,6 +803,9 @@ def compute_step_discounted_returns(batch: DataProto, gamma: float):
     
     all_returns = torch.tensor(all_returns, dtype=torch.float32, device=batch.batch['input_ids'].device)
     return all_returns
+
+
+    
 
 # ---------------------------------------------------------- #
 # ---------------- Core Functions of GiGPO ----------------- #
