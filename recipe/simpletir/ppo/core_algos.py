@@ -180,6 +180,84 @@ def compute_grpo_outcome_advantage(
     return scores, scores
 
 
+def compute_aepo_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    traj_index: np.ndarray,
+    entropy: torch.Tensor = None,
+    entropy_weight: float = 0.2,
+    epsilon: float = 1e-6,
+    norm_adv_by_std_in_grpo: bool = True,
+    compute_mean_std_cross_steps: bool = True,
+):
+    """
+    Compute advantage for AEPO (Adaptive Entropy Policy Optimization).
+    
+    AEPO first computes GRPO advantages, then modifies them based on token-level entropy.
+    Higher entropy (uncertainty) leads to adjusted advantages to encourage exploration.
+    
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape is (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape is (bs, response_length)
+        index: `(np.ndarray)`
+            Prompt indices for grouping
+        traj_index: `(np.ndarray)`
+            Trajectory indices
+        entropy: `(torch.Tensor, optional)`
+            Token-level entropy, shape is (bs, response_length). If None, AEPO behaves like GRPO.
+        entropy_weight: `(float)`
+            Weight for entropy-based advantage modification (default: 0.2)
+        epsilon: `(float)`
+            Small value for numerical stability
+        norm_adv_by_std_in_grpo: `(bool)`
+            Whether to normalize GRPO advantages by std
+        compute_mean_std_cross_steps: `(bool)`
+            Whether to compute mean/std across steps
+            
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape is (bs, response_length)
+        returns: `(torch.Tensor)`
+            shape is (bs, response_length)
+    """
+    # First compute GRPO advantages
+    advantages, returns = compute_grpo_outcome_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        traj_index=traj_index,
+        epsilon=epsilon,
+        norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        compute_mean_std_cross_steps=compute_mean_std_cross_steps,
+    )
+    
+    # Apply entropy-based modification if entropy is available
+    if entropy is not None and entropy_weight > 0:
+        # Normalize entropy: (entropy - mean) / std
+        valid_entropy = entropy * response_mask.float()
+        valid_entropy_flat = valid_entropy[response_mask.bool()]
+        
+        if len(valid_entropy_flat) > 0:
+            entropy_mean = valid_entropy_flat.mean()
+            entropy_std = valid_entropy_flat.std()
+            
+            # Avoid division by zero
+            if entropy_std == 0:
+                entropy_std = torch.tensor(1.0, device=entropy.device)
+            
+            # Normalize entropy
+            entropy_normalized = (entropy - entropy_mean) / entropy_std
+            
+            # Modify advantages based on normalized entropy
+            # Higher entropy (uncertainty) scales advantages
+            advantages = advantages * (1 + entropy_weight * entropy_normalized.detach())
+    
+    return advantages, returns
+
+
 def compute_grpo_passk_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -495,6 +573,139 @@ def compute_policy_loss(
     pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
+
+
+def compute_policy_loss_entropy_balanced_clipping(
+    old_log_prob,
+    log_prob,
+    entropy,
+    advantages,
+    response_mask,
+    enable_entropy_balanced_clipping,
+    enable_entropy_balanced_advantage,
+    cliprange=None,
+    cliprange_low=None,
+    cliprange_high=None,
+    clip_ratio_c=3.0,
+    loss_agg_mode="token-mean",
+):
+    """
+    Compute policy loss with entropy-balanced clipping and advantage modification.
+    
+    This implements AEPO's entropy-based mechanisms:
+    1. Entropy-balanced advantage: modifies advantages based on normalized entropy
+    2. Entropy-balanced clipping: stops gradients for high entropy tokens in clipping bounds
+    
+    Args:
+        old_log_prob: (torch.Tensor) shape: (bs, response_length)
+        log_prob: (torch.Tensor) shape: (bs, response_length)
+        entropy: (torch.Tensor) shape: (bs, response_length) - token-level entropy
+        advantages: (torch.Tensor) shape: (bs, response_length)
+        response_mask: (torch.Tensor) shape: (bs, response_length)
+        enable_entropy_balanced_clipping: (bool) If True, stops gradients for high entropy tokens
+        enable_entropy_balanced_advantage: (bool) If True, modifies advantages based on entropy
+        cliprange: (float) The clip range used in PPO
+        cliprange_low: (float) The lower clip range
+        cliprange_high: (float) The higher clip range
+        clip_ratio_c: (float) Lower bound of ratio for dual-clip PPO
+        loss_agg_mode: (str) Aggregation mode for loss
+        
+    Returns:
+        pg_loss: scalar torch.Tensor - policy gradient loss
+        pg_clipfrac: float - fraction of loss being clipped
+        ppo_kl: float - estimated KL divergence
+        pg_clipfrac_lower: float - fraction clipped when advantage is negative
+    """
+    # Apply entropy-based advantage modification
+    if enable_entropy_balanced_advantage and entropy is not None:
+        # Compute valid entropy positions
+        valid_entropy = entropy * response_mask.float()
+        valid_entropy_flat = valid_entropy[response_mask.bool()]
+        
+        if len(valid_entropy_flat) > 0:
+            entropy_mean = valid_entropy_flat.mean()
+            entropy_std = valid_entropy_flat.std()
+            
+            # Avoid division by zero
+            if entropy_std == 0:
+                entropy_std = torch.tensor(1.0, device=entropy.device)
+            
+            # Normalize entropy: (entropy - mean) / std
+            entropy_normalized = (entropy - entropy_mean) / entropy_std
+            
+            # Modify advantages based on normalized entropy (detached, no gradients)
+            advantages = advantages * (1 + 0.2 * entropy_normalized.detach())
+    
+    assert clip_ratio_c > 1.0, (
+        "The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0,"
+        + f" but get the value: {clip_ratio_c}."
+    )
+    
+    negative_approx_kl = log_prob - old_log_prob
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    
+    pg_losses1 = -advantages * ratio
+    
+    if cliprange_low is None:
+        cliprange_low = cliprange
+    if cliprange_high is None:
+        cliprange_high = cliprange
+    
+    # Entropy-balanced clipping: keep gradients when high entropy happens
+    if enable_entropy_balanced_clipping:
+        min_bound = torch.full_like(ratio, 1 - cliprange_low)
+        # Original AEPO formula: max_bound = (1 + cliprange_high) / ratio.detach() * ratio
+        # This keeps gradient through the final ratio multiplication but stops it in the denominator
+        # When high entropy happens, we want to keep gradient, so we conditionally detach
+        if entropy is not None:
+            # Normalize entropy to determine when to keep gradients
+            valid_entropy = entropy * response_mask.float()
+            valid_entropy_flat = valid_entropy[response_mask.bool()]
+            if len(valid_entropy_flat) > 0:
+                entropy_mean = valid_entropy_flat.mean()
+                entropy_std = valid_entropy_flat.std()
+                if entropy_std == 0:
+                    entropy_std = torch.tensor(1.0, device=entropy.device)
+                entropy_normalized = (entropy - entropy_mean) / entropy_std
+                
+                # When entropy is high (uncertainty > mean), keep gradient (use ratio), otherwise stop gradient (use ratio.detach())
+                # entropy_normalized > 0 means high entropy, so use ratio (keep gradient)
+                ratio_for_bound = torch.where(
+                    entropy_normalized > 0,
+                    ratio,  # High entropy: keep gradient
+                    ratio.detach()  # Low entropy: stop gradient
+                )
+                max_bound = (1 + cliprange_high) / ratio_for_bound * ratio
+            else:
+                # Fallback to original behavior
+                max_bound = (1 + cliprange_high) / ratio.detach() * ratio
+        else:
+            # Original AEPO behavior when entropy is not available
+            max_bound = (1 + cliprange_high) / ratio.detach() * ratio
+        pg_losses2 = -advantages * torch.clamp(ratio, min_bound, max_bound)
+    else:
+        pg_losses2 = -advantages * torch.clamp(
+            ratio, 1 - cliprange_low, 1 + cliprange_high
+        )
+    
+    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+    pg_clipfrac = verl_F.masked_mean(
+        torch.gt(pg_losses2, pg_losses1).float(), response_mask
+    )
+    
+    pg_losses3 = -advantages * clip_ratio_c
+    clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
+    pg_clipfrac_lower = verl_F.masked_mean(
+        torch.gt(clip_pg_losses1, pg_losses3) * (advantages < 0).float(), response_mask
+    )
+    
+    pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
+    pg_loss = agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
+    )
+    
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 

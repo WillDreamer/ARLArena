@@ -79,21 +79,19 @@ critic:
 reward_model:
   reward_manager: math
 
+agent:
+  tool_use: True
+  max_turns: 5
+  append_final_answer_func: False
+
 algorithm:
   use_kl_in_reward: False
   kl_ctrl:
     kl_coef: 0.0
-
-# Enable AEPO (Adaptive Entropy Policy Optimization) instead of standard GRPO
-# Set use_aepo: true to use AEPO, or omit/set to false for standard GRPO
-use_aepo: False
-
-agent:
-  tool_use: True
-  max_turns: 5
-  append_final_answer_func: True
+  # Advantage estimator: use "aepo" for AEPO, "grpo" for standard GRPO, etc.
+  adv_estimator: grpo
   
-  # AEPO-specific configuration (only used when use_aepo: true)
+  # AEPO-specific configuration (only used when algorithm.adv_estimator=aepo)
   # These parameters control the adaptive entropy-based rollout and branching behavior
   aepo:
     # Core AEPO parameters
@@ -111,3 +109,7 @@ agent:
     # Branching control
     consecutive_branch_penalty: 0.05  # Penalty factor for consecutive branches (0-1, higher = less consecutive branching)
     beam_size: 2                      # Maximum branches to create from one sample
+    
+    # Entropy-balanced mechanisms for policy optimization
+    enable_entropy_balanced_advantage: True   # If True, modifies advantages based on normalized entropy
+    enable_entropy_balanced_clipping: True    # If True, stops gradients for high entropy tokens in clipping bounds

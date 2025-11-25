@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,26 +20,26 @@ VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=4
 ROLLOUT_TEMPERATURE=1.0
+VAL_BEFORE_TRAIN=False
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=True
-MAX_PROMPT_LENGTH=8000
-MAX_RESPONSE_LENGTH=8000
+MAX_PROMPT_LENGTH=1000
+MAX_RESPONSE_LENGTH=1000
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
+PPO_MICRO_TOKEN=12000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/train" "/home/xw27/agent/ARLArena/dataset/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime25")
-ROLLOUT_GPU_MEMORY_UTIL=0.5
+VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime25" "/home/xw27/agent/ARLArena/dataset/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/dataset/deepscaler/math_500")
+ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-1.7B
+MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=True #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1
-REJECTION_SAMPLE=True
+REJECTION_SAMPLE=False
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -58,7 +58,7 @@ GPUS_PER_NODE=$NUM_GPUS
 # ======================== AEPO Hyper-parameters ========================
 AEPO_ENTROPY_WEIGHT=0.5
 AEPO_BRANCH_PROBABILITY=0.5
-AEPO_INITIAL_ROLLOUTS=1
+AEPO_INITIAL_ROLLOUTS=8
 AEPO_LOGPROBS=10
 AEPO_ENABLE_DYNAMIC_ROLLOUTS=False
 AEPO_INITIAL_ENTROPY_TOKENS=50
@@ -66,9 +66,17 @@ AEPO_DYNAMIC_ROLLOUT_MIN=1
 AEPO_DYNAMIC_ROLLOUT_MAX=null
 AEPO_CONSECUTIVE_BRANCH_PENALTY=0.05
 AEPO_BEAM_SIZE=2
+AEPO_ENABLE_ENTROPY_BALANCED_ADVANTAGE=True
+AEPO_ENABLE_ENTROPY_BALANCED_CLIPPING=True
 RESUME=False
-PROJECT_NAME=simpletir_math
-CHECKPOINT_PATH=/local/xw27/ARLArena/outputs
+
+LOG_PATH=outputs
+RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_aepo
+LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
+
+CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
+ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -162,9 +170,6 @@ generate_suffix() {
 
 echo "Arguments received: $@"
 
-LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_temp
-LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 # Parse named arguments
 while [[ "$#" -gt 0 ]]; do
@@ -229,6 +234,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
+PORT=3336
+DASHBOARD_PORT=3335
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -314,7 +321,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=aepo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
@@ -365,15 +372,16 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     data.max_obs_length=$MAX_OBS_LENGTH \
     trainer.val_only=$VAL_ONLY \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
-    use_aepo=True \
-    agent.aepo.entropy_weight=$AEPO_ENTROPY_WEIGHT \
-    agent.aepo.branch_probability=$AEPO_BRANCH_PROBABILITY \
-    agent.aepo.initial_rollouts=$AEPO_INITIAL_ROLLOUTS \
-    agent.aepo.logprobs=$AEPO_LOGPROBS \
-    agent.aepo.enable_dynamic_rollouts=$AEPO_ENABLE_DYNAMIC_ROLLOUTS \
-    agent.aepo.initial_entropy_tokens=$AEPO_INITIAL_ENTROPY_TOKENS \
-    agent.aepo.dynamic_rollout_min=$AEPO_DYNAMIC_ROLLOUT_MIN \
-    agent.aepo.dynamic_rollout_max=$AEPO_DYNAMIC_ROLLOUT_MAX \
-    agent.aepo.consecutive_branch_penalty=$AEPO_CONSECUTIVE_BRANCH_PENALTY \
-    agent.aepo.beam_size=$AEPO_BEAM_SIZE \
+    algorithm.aepo.entropy_weight=$AEPO_ENTROPY_WEIGHT \
+    algorithm.aepo.branch_probability=$AEPO_BRANCH_PROBABILITY \
+    algorithm.aepo.initial_rollouts=$AEPO_INITIAL_ROLLOUTS \
+    algorithm.aepo.logprobs=$AEPO_LOGPROBS \
+    algorithm.aepo.enable_dynamic_rollouts=$AEPO_ENABLE_DYNAMIC_ROLLOUTS \
+    algorithm.aepo.initial_entropy_tokens=$AEPO_INITIAL_ENTROPY_TOKENS \
+    algorithm.aepo.dynamic_rollout_min=$AEPO_DYNAMIC_ROLLOUT_MIN \
+    algorithm.aepo.dynamic_rollout_max=$AEPO_DYNAMIC_ROLLOUT_MAX \
+    algorithm.aepo.consecutive_branch_penalty=$AEPO_CONSECUTIVE_BRANCH_PENALTY \
+    algorithm.aepo.beam_size=$AEPO_BEAM_SIZE \
+    algorithm.aepo.enable_entropy_balanced_advantage=$AEPO_ENABLE_ENTROPY_BALANCED_ADVANTAGE \
+    algorithm.aepo.enable_entropy_balanced_clipping=$AEPO_ENABLE_ENTROPY_BALANCED_CLIPPING \
     | tee -a $LOG_FILE_PATH
