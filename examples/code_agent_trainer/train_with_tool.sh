@@ -6,7 +6,7 @@ val_data=[datasets/${dataset_name}/test.parquet]
 
 ulimit -n 1048576
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -17,7 +17,6 @@ echo "Detected ${NUM_GPUS} GPUs for this run"
 
 model_name=Qwen/Qwen2.5-Coder-7B
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=8
 n_nodes=1
 n=16
 batch_size=128
@@ -149,7 +148,7 @@ PYTHONUNBUFFERED=1 python3 -m recipe.code_agent.trainer.main_ppo \
     trainer.experiment_name=$run_name \
     trainer.val_before_train=True \
     trainer.default_hdfs_dir=null \
-    trainer.n_gpus_per_node=$n_gpus_per_node \
+    trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.nnodes=$n_nodes \
     +trainer.remove_previous_ckpt_in_save=False \
     trainer.save_freq=10 \

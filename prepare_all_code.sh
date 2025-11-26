@@ -31,7 +31,7 @@ fi
 
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
-conda create -n agentrl_code python==3.11 -y
+conda create -n agentrl_code python==3.10 -y
 conda activate agentrl_code
 pip install uv
 
@@ -41,11 +41,9 @@ uv pip install transformers==4.51.3
 uv pip install matplotlib
 uv pip install gym==0.26.2
 uv pip install ray==2.45.0
-conda install -c conda-forge fire -y
-conda install -c conda-forge "numpy<2.0" -y
+# conda install -c conda-forge fire -y
+# conda install -c conda-forge "numpy<2.0" -y
 uv pip install "pillow"
-# uv pip install "qwen_vl_utils"
-# uv pip install "qwen_omni_utils"
 uv pip install func_timeout
 uv pip install torch==2.8.0
 uv pip install torchvision==0.21.0
@@ -56,6 +54,8 @@ pip uninstall -y opentelemetry-sdk opentelemetry-api opentelemetry-exporter-otlp
 pip install "opentelemetry-api>=1.30.0" "opentelemetry-sdk>=1.30.0" "opentelemetry-exporter-otlp>=1.30.0"
 
 pip install "AceCoder @ git+https://github.com/TIGER-AI-Lab/AceCoder.git@dev"
+pip install qwen_vl_utils
+pip install qwen_omni_utils
 
 if command -v conda >/dev/null 2>&1; then
   conda activate agentrl_code || true

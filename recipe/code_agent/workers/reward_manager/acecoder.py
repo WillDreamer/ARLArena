@@ -130,6 +130,8 @@ class AceCoderRewardManager:
         self.add_no_tool_interact_penalty = False # -1.0 if the traj's num turn is 0, no interaction at all
         self.add_code_exec_penalty = False # -0.25 if the execution has an error.
         self.reward_fn_key = reward_fn_key
+        self.record_dir = Path.cwd() / "outputs" / "acecoder"
+        os.makedirs(self.record_dir, exist_ok=True)
 
         try:
             from acecoder import evaluate_test_cases
@@ -161,7 +163,7 @@ class AceCoderRewardManager:
             for sample in samples:
                 f.write(json.dumps(sample) + "\n")
         # perform batched scoring for coding score: call the acecoder evaluation script to retrieve the coder part scores
-        output_file = Path(temp_file).with_suffix(f".eval_results_binary.jsonl").absolute()
+        output_file = temp_file
         command = f"python -m acecoder.eval_test_cases --samples {temp_file} --n_workers {self.n_workers} \
             --extract_solution True --output_file {output_file} --test_details True \
             --i_just_wanna_run True --min_time_limit 1 --gt_time_limit_factor 1"
@@ -170,7 +172,7 @@ class AceCoderRewardManager:
         end = time.time()
         print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
         # the script will dump the results into the output_file, read it and parse it as a list
-        with open(output_file, "r") as f:
+        with open(output_file, "wr") as f:
             all_samples_results = [json.loads(x) for x in f]
         pass_rates = [x['eval_results']['pass_rate'] for x in all_samples_results]
         # print the error statistics
