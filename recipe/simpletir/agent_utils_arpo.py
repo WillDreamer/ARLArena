@@ -1,8 +1,10 @@
 import asyncio
 import os
 import re
+import math
+import random
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import torch
 
@@ -133,6 +135,12 @@ class GenerationConfig:
     rollout_n: int
     mask_void_turns: bool
     append_final_answer_func: bool
+    # ARPO Entropy parameters
+    entropy_weight: float = 0.5  # Weight for entropy in branching decision
+    branch_probability: float = 0.5  # Base probability threshold for branching
+    initial_rollouts: Optional[int] = None  # Initial number of rollouts (if different from rollout_n)
+    beam_size: int = 2  # Maximum branches to create from one sample
+    logprobs: int = 10  # Number of top logprobs to request from generation
 
 
 class AgentHelper:
@@ -160,6 +168,83 @@ class AgentHelper:
             "final_prompt": "\n",
         }
         self.error_n_line = 1
+
+        # ARPO Entropy: Initialize entropy tracking
+        self.initial_entropy_dict = {}  # Record initial entropy of active indices
+        self.entropy_weight = config.entropy_weight
+        self.branch_probability = config.branch_probability
+        self.initial_rollouts = config.initial_rollouts if config.initial_rollouts is not None else config.rollout_n
+        self.beam_size = config.beam_size
+        self.logprobs = config.logprobs
+
+    def _calc_entropy(self, logprobs: List[float]) -> float:
+        """
+        Calculate Shannon entropy from log probabilities.
+        
+        Args:
+            logprobs: List of log probabilities
+            
+        Returns:
+            Entropy value
+        """
+        if not logprobs:
+            return 0.0
+        p_list = [math.exp(l) for l in logprobs]
+        entropy = -sum(p * l for p, l in zip(p_list, logprobs))
+        return entropy
+
+    def _get_entropy_from_output(
+        self, 
+        gen_output: DataProto, 
+        sample_idx: int,
+        vocab_size: Optional[int] = None
+    ) -> float:
+        """
+        Extract and calculate normalized entropy from generation output.
+        
+        Args:
+            gen_output: DataProto containing generation output
+            sample_idx: Index of the sample in the batch
+            vocab_size: Vocabulary size for normalization
+            
+        Returns:
+            Normalized entropy (0-1 range)
+        """
+        if vocab_size is None:
+            vocab_size = len(self.tokenizer)
+        
+        entropy_norm_factor = math.log(vocab_size)
+        
+        # Try to extract logprobs from meta_info
+        if hasattr(gen_output, 'meta_info') and gen_output.meta_info:
+            if 'logprobs' in gen_output.meta_info:
+                logprobs_data = gen_output.meta_info['logprobs']
+                if sample_idx < len(logprobs_data):
+                    # Extract logprobs for this sample
+                    sample_logprobs = logprobs_data[sample_idx]
+                    
+                    # Handle different logprob formats
+                    token_logprobs = []
+                    if isinstance(sample_logprobs, list):
+                        for lp_item in sample_logprobs[:20]:  # First 20 tokens
+                            if isinstance(lp_item, dict):
+                                # Format: {token_id: LogprobInfo}
+                                token_logprobs.extend([
+                                    lp.logprob if hasattr(lp, 'logprob') else lp
+                                    for lp in lp_item.values()
+                                ])
+                            elif hasattr(lp_item, 'logprob'):
+                                token_logprobs.append(lp_item.logprob)
+                            elif isinstance(lp_item, (int, float)):
+                                token_logprobs.append(float(lp_item))
+                    
+                    if token_logprobs:
+                        entropy = self._calc_entropy(token_logprobs) / entropy_norm_factor
+                        return entropy
+        
+        # Fallback: try to extract from responses if available
+        # This is a placeholder - you may need to adjust based on your actual output format
+        return 0.0
 
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:
         """Tokenize a batch of responses."""
@@ -298,11 +383,26 @@ class AgentHelper:
     def _generate_with_gpu_padding(self, active_batch: DataProto) -> DataProto:
         """
         Wrapper for generation that handles multi-GPU padding requirements.
+        ARPO Entropy: Also requests logprobs for entropy calculation.
+        
         if num_gpus <= 1, return self.actor_rollout_wg.generate_sequences(active_batch)
         if active_batch size is not divisible by num_gpus, pad with first sequence
         then remove padding from output
         """
         num_gpus = self.config.num_gpus
+        
+        # ARPO Entropy: Request logprobs in meta_info if not already present
+        if not hasattr(active_batch, 'meta_info') or active_batch.meta_info is None:
+            active_batch.meta_info = {}
+        
+        # Set logprobs request in sampling_params if supported
+        if 'sampling_params' not in active_batch.meta_info:
+            active_batch.meta_info['sampling_params'] = {}
+        active_batch.meta_info['sampling_params']['logprobs'] = self.logprobs
+        
+        # Also pass logprobs directly in meta_info for easier access
+        active_batch.meta_info['request_logprobs'] = self.logprobs
+        
         if num_gpus <= 1:
             return self.actor_rollout_wg.generate_sequences(active_batch)
 
@@ -344,6 +444,8 @@ class AgentHelper:
             for k, v in padded_output.meta_info.items():
                 if isinstance(v, torch.Tensor):
                     trimmed_meta[k] = v[:-padding_size]
+                elif isinstance(v, list) and len(v) > padding_size:
+                    trimmed_meta[k] = v[:-padding_size]
                 else:
                     trimmed_meta[k] = v
             padded_output.meta_info = trimmed_meta
@@ -351,14 +453,51 @@ class AgentHelper:
         padded_output.batch = trimmed_batch
         return padded_output
 
+    def _get_original_sample_idx(self, rollout_idx: int, batch_size: int) -> int:
+        """
+        Get the original sample index for a given rollout index.
+        
+        Args:
+            rollout_idx: Index in the rollout batch
+            batch_size: Original batch size
+            
+        Returns:
+            Original sample index
+        """
+        return rollout_idx // self.config.rollout_n
+
+    def _should_branch_based_on_entropy(
+        self,
+        entropy_now: float,
+        entropy_init: float,
+    ) -> bool:
+        """
+        ARPO Entropy: Decide whether to branch based on entropy delta.
+        
+        Args:
+            entropy_now: Current entropy value
+            entropy_init: Initial entropy value
+            
+        Returns:
+            True if should branch, False otherwise
+        """
+        entropy_delta = entropy_now - entropy_init
+        prob = random.random() - self.entropy_weight * entropy_delta
+        prob = max(0.0, min(1.0, prob))
+        
+        # If prob > branch_probability, skip branching (model is confident)
+        # If prob <= branch_probability, do branching (model is uncertain)
+        return prob <= self.branch_probability
+
     def run_llm_loop(
         self,
         gen_batch,
         initial_input_ids: torch.Tensor,
         timeout: int = 5,
     ) -> Tuple[Dict, Dict]:
-        """Run main LLM generation loop."""
-        #! 
+        """
+        Run main LLM generation loop with ARPO entropy-based adaptive branching.
+        """
         batch_size = gen_batch.batch["input_ids"].shape[0]
 
         self.timeout = timeout
@@ -389,6 +528,12 @@ class AgentHelper:
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
 
+        # ARPO Entropy: Initialize entropy tracking dictionaries
+        current_entropy_dict = {}  # Track current entropy per rollout index
+        branching_decisions_per_step = {}  # Track branching decisions per step for analysis
+        vocab_size = len(self.tokenizer)
+        entropy_norm_factor = math.log(vocab_size)
+
         # Main generation loop
         for step in range(self.config.max_turns):
             if not active_mask.sum():
@@ -397,55 +542,15 @@ class AgentHelper:
                 rollings.batch, keys=["input_ids", "attention_mask", "position_ids"]
             )
 
-            # breakpoint()
-            
-            # Generate responses for active batches
-            # if step != 0:
-            #     #! 只留下active_mask=true的
-            #     rollings_active = DataProto.from_dict(
-            #         {k: v[active_mask] for k, v in rollings.batch.items()}
-            #     )
-
-            #     # rollings_active.meta_info["do_sample"] = False
-            #     rollings_active.meta_info["n"] = 1
-            #     # rollings_active.meta_info["validate"] = True
-            # else:
-            #     rollings_active = rollings
-            #     if self.config.rollout_n == 1:
-            #         rollings_active.meta_info["n"] = 1
-            #         # rollings_active.meta_info["do_sample"] = False
-            #         # rollings_active.meta_info["validate"] = True
-            #     else:
-            #         rollings_active.meta_info["n"] = self.config.rollout_n
-            #         repeated_rollings_dict = {}
-            #         for k, v in rollings.batch.items():
-            #             repeated_rollings_dict[k] = v.repeat_interleave(
-            #                 self.config.rollout_n, dim=0
-            #             )
-            #         rollings = DataProto.from_dict(repeated_rollings_dict) #! 这里rollings_active是重复rollout_n次的rollings
-            #         for k, v in original_left_side.items():
-            #             original_left_side[k] = v.repeat_interleave(
-            #                 self.config.rollout_n, dim=0
-            #             )
-            #         for k, v in original_right_side.items():
-            #             original_right_side[k] = v.repeat_interleave(
-            #                 self.config.rollout_n, dim=0
-            #             )
-                # rollings_active = rollings
-
             # Generate responses for active batches
             if step != 0:
-                #! 只留下active_mask=true的
+                # Only keep active_mask=true samples
                 rollings_active = DataProto.from_dict(
                     {k: v[active_mask] for k, v in rollings.batch.items()}
                 )
-                # rollings_active.meta_info["do_sample"] = True
-                # rollings_active.meta_info["validate"] = True
             else:
                 rollings_active = rollings
                 if self.config.rollout_n == 1:
-                    # rollings_active.meta_info["do_sample"] = True
-                    # rollings_active.meta_info["validate"] = True
                     rollings_active.meta_info["n"] = 1
                 else:
                     repeated_rollings_dict = {}
@@ -463,8 +568,29 @@ class AgentHelper:
                             self.config.rollout_n, dim=0
                         )
                 rollings_active = rollings
+            
+            # Generate with logprobs for entropy calculation
             gen_output = self._generate_with_gpu_padding(rollings_active)
-            # breakpoint()
+            
+            # ARPO Entropy: Calculate entropy for each active sample
+            active_indices_list = torch.where(active_mask)[0].tolist()
+            for i, rollout_idx in enumerate(active_indices_list):
+                entropy = self._get_entropy_from_output(gen_output, i, vocab_size)
+                current_entropy_dict[rollout_idx] = entropy
+                
+                # Store initial entropy on first generation for this rollout
+                if rollout_idx not in self.initial_entropy_dict:
+                    self.initial_entropy_dict[rollout_idx] = entropy
+                else:
+                    # ARPO Entropy: Check if should branch based on entropy change
+                    # This provides monitoring/analysis of when branching would occur
+                    entropy_init = self.initial_entropy_dict[rollout_idx]
+                    should_branch = self._should_branch_based_on_entropy(entropy, entropy_init)
+                    # Store branching decision for logging (could be used for dynamic branching later)
+                    if step not in branching_decisions_per_step:
+                        branching_decisions_per_step[step] = {}
+                    branching_decisions_per_step[step][rollout_idx] = should_branch
+
             # Post-process responses
             meta_info = gen_output.meta_info
             responses_ids, responses_str = self._postprocess_responses(
@@ -507,6 +633,29 @@ class AgentHelper:
                 original_right_side, responses_ids, next_obs_ids
             )
 
+            # ARPO Entropy: Log entropy statistics (optional)
+            # You can use entropy information here for adaptive branching if needed
+            # For now, we just track it for logging purposes
+
+        # Add entropy statistics to meta_info
+        entropy_stats = {}
+        branching_decisions_all = {}  # Track branching decisions across all steps
+        for rollout_idx in self.initial_entropy_dict.keys():
+            entropy_init = self.initial_entropy_dict.get(rollout_idx, 0.0)
+            entropy_now = current_entropy_dict.get(rollout_idx, 0.0)
+            entropy_delta = entropy_now - entropy_init
+            
+            # ARPO Entropy: Use the branching decision method to determine if should branch
+            should_branch = self._should_branch_based_on_entropy(entropy_now, entropy_init)
+            branching_decisions_all[rollout_idx] = should_branch
+            
+            entropy_stats[rollout_idx] = {
+                "initial_entropy": entropy_init,
+                "final_entropy": entropy_now,
+                "entropy_delta": entropy_delta,
+                "should_branch": should_branch,  # Whether this rollout should branch based on entropy
+            }
+
         meta_info["turns_stats"] = turns_stats.tolist()
         meta_info["active_mask"] = active_mask.tolist()
         meta_info["void_turn_mask"] = void_turn_mask.tolist()
@@ -516,9 +665,10 @@ class AgentHelper:
         meta_info["fail_code_lines"] = fail_code_lines
         meta_info["success_code_strip_lines"] = success_code_strip_lines
         meta_info["fail_code_strip_lines"] = fail_code_strip_lines
+        meta_info["entropy_stats"] = entropy_stats
+        meta_info["branching_decisions_per_step"] = branching_decisions_per_step  # Track branching decisions across all steps
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
-        # breakpoint()
         return self._compose_final_output(
             original_left_side, original_right_side, void_turn_mask, meta_info
         )
@@ -579,12 +729,11 @@ class AgentHelper:
         NOTE penalty_for_invalid is not included in observation shown to the LLM
 
         Args:
-            envs: List of environment instances
             predictions: List of action predictions
-            pad_token: Token to use for padding
+            active_mask: Mask indicating which samples are active
 
         Returns:
-            List of observation strings
+            Tuple of (next_obs, dones, is_void_turn, code_info)
         """
         next_obs = [None] * len(active_mask)
         dones = [0] * len(active_mask)
@@ -626,10 +775,6 @@ class AgentHelper:
                     # Neither answer(\boxed) nor code is detected, directly stop the generation
                     next_obs[i] = self.prompt_dict["no_tool_prompt"]
                     dones[i] = 1
-                    # It is likely that single turn response length is exceeded
-                    # If so, stop following generations due to void turns
-                    # But seems that no responses is overlong, so comment it now
-                    # if responses_ids[i].shape[0] >= self.config.max_response_length:
                     if self.config.mask_void_turns:
                         is_void_turn[i] = 1
             else:
@@ -718,3 +863,4 @@ def count_lines(code_str: str) -> tuple[int, int]:
     )
 
     return total_lines, code_lines
+
