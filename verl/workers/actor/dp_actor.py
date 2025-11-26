@@ -440,9 +440,8 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_scale_factor = 1 / self.gradient_accumulation
 
                     # all return: (bsz, response_length)
-                    calculate_entropy = False
-                    if entropy_coeff != 0:
-                        calculate_entropy = True
+                    loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+                    calculate_entropy = entropy_coeff != 0 or loss_mode == "aepo"
 
                     #* new log prob entropy
                     entropy, log_prob = self._forward_micro_batch(
@@ -466,15 +465,20 @@ class DataParallelPPOActor(BasePPOActor):
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
-                        old_log_prob=curr_old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        loss_agg_mode=loss_agg_mode,
-                        config=self.config,
-                        rollout_log_probs=rollout_log_probs,
-                    )
+                    # AEPO requires entropy, pass it when loss_mode is "aepo"
+                    policy_loss_kwargs = {
+                        "old_log_prob": curr_old_log_prob,
+                        "log_prob": log_prob,
+                        "advantages": advantages,
+                        "response_mask": response_mask,
+                        "loss_agg_mode": loss_agg_mode,
+                        "config": self.config,
+                    }
+                    if loss_mode == "aepo":
+                        policy_loss_kwargs["entropy"] = entropy
+                    if rollout_log_probs is not None:
+                        policy_loss_kwargs["rollout_log_probs"] = rollout_log_probs
+                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(**policy_loss_kwargs)
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)

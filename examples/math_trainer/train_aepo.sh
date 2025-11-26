@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,13 +20,13 @@ VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=4
 ROLLOUT_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
 VAL_TEMPERATURE=1.0
-MAX_PROMPT_LENGTH=1000
-MAX_RESPONSE_LENGTH=1000
+VAL_BEFORE_TRAIN=False
+MAX_PROMPT_LENGTH=8000
+MAX_RESPONSE_LENGTH=8000
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=12000
+PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/train" "/home/xw27/agent/ARLArena/dataset/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
@@ -55,20 +55,8 @@ OUTPUT_ACC_TO_FILE=False
 CONFIG_NAME=simpletir_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-# ======================== AEPO Hyper-parameters ========================
-AEPO_ENTROPY_WEIGHT=0.5
-AEPO_BRANCH_PROBABILITY=0.5
-AEPO_INITIAL_ROLLOUTS=8
-AEPO_LOGPROBS=10
-AEPO_ENABLE_DYNAMIC_ROLLOUTS=False
-AEPO_INITIAL_ENTROPY_TOKENS=50
-AEPO_DYNAMIC_ROLLOUT_MIN=1
-AEPO_DYNAMIC_ROLLOUT_MAX=null
-AEPO_CONSECUTIVE_BRANCH_PENALTY=0.05
-AEPO_BEAM_SIZE=2
-AEPO_ENABLE_ENTROPY_BALANCED_ADVANTAGE=True
-AEPO_ENABLE_ENTROPY_BALANCED_CLIPPING=True
 RESUME=False
+PROJECT_NAME=simpletir_math
 
 LOG_PATH=outputs
 RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_aepo
@@ -76,7 +64,6 @@ LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
 ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
-
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -226,6 +213,7 @@ fi
 
 # ======================== start ray ========================
 RAY_TMP=~/ARLArena/outputs
+mkdir -p $RAY_TMP
 export RAY_TMPDIR="$RAY_TMP"
 export TMPDIR="$RAY_TMP"
 # if pgrep -f "ray" > /dev/null; then
@@ -234,10 +222,10 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=3336
-DASHBOARD_PORT=3335
+PORT=4334
+DASHBOARD_PORT=4333
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
-ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
+ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT --num-gpus $NUM_GPUS
 RUN_NAME+="_$MODEL_NAME"
 
 
@@ -344,6 +332,8 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     actor_rollout_ref.rollout.val_kwargs.n=$N_VAL \
     actor_rollout_ref.rollout.val_kwargs.temperature=$VAL_TEMPERATURE \
     actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
     actor_rollout_ref.ref.ulysses_sequence_parallel_size=$SP_SIZE\
     trainer.rejection_sample=$REJECTION_SAMPLE \
@@ -372,16 +362,6 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     data.max_obs_length=$MAX_OBS_LENGTH \
     trainer.val_only=$VAL_ONLY \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
-    algorithm.aepo.entropy_weight=$AEPO_ENTROPY_WEIGHT \
-    algorithm.aepo.branch_probability=$AEPO_BRANCH_PROBABILITY \
-    algorithm.aepo.initial_rollouts=$AEPO_INITIAL_ROLLOUTS \
-    algorithm.aepo.logprobs=$AEPO_LOGPROBS \
-    algorithm.aepo.enable_dynamic_rollouts=$AEPO_ENABLE_DYNAMIC_ROLLOUTS \
-    algorithm.aepo.initial_entropy_tokens=$AEPO_INITIAL_ENTROPY_TOKENS \
-    algorithm.aepo.dynamic_rollout_min=$AEPO_DYNAMIC_ROLLOUT_MIN \
-    algorithm.aepo.dynamic_rollout_max=$AEPO_DYNAMIC_ROLLOUT_MAX \
-    algorithm.aepo.consecutive_branch_penalty=$AEPO_CONSECUTIVE_BRANCH_PENALTY \
-    algorithm.aepo.beam_size=$AEPO_BEAM_SIZE \
-    algorithm.aepo.enable_entropy_balanced_advantage=$AEPO_ENABLE_ENTROPY_BALANCED_ADVANTAGE \
-    algorithm.aepo.enable_entropy_balanced_clipping=$AEPO_ENABLE_ENTROPY_BALANCED_CLIPPING \
+    +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
+    trainer.max_actor_ckpt_to_keep=2 \
     | tee -a $LOG_FILE_PATH

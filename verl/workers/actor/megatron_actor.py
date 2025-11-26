@@ -316,14 +316,23 @@ class MegatronPPOActor(BasePPOActor):
         loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
 
         policy_loss_fn = get_policy_loss_fn(loss_mode)
-        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
-            old_log_prob=old_log_prob,
-            log_prob=log_prob,
-            advantages=advantages,
-            response_mask=response_mask,
-            loss_agg_mode=loss_agg_mode,
-            config=self.config,
-        )
+        # AEPO requires entropy, pass it when loss_mode is "aepo"
+        policy_loss_kwargs = {
+            "old_log_prob": old_log_prob,
+            "log_prob": log_prob,
+            "advantages": advantages,
+            "response_mask": response_mask,
+            "loss_agg_mode": loss_agg_mode,
+            "config": self.config,
+        }
+        if loss_mode == "aepo":
+            if entropy is None:
+                raise ValueError(
+                    "AEPO policy loss requires entropy, but entropy is None. "
+                    "Please ensure entropy is computed and passed in model_output."
+                )
+            policy_loss_kwargs["entropy"] = entropy
+        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(**policy_loss_kwargs)
 
         metrics.update(
             {
@@ -575,7 +584,8 @@ class MegatronPPOActor(BasePPOActor):
                 # if use distributed optimizer, zero grad buffer will be handled by optimizer
                 chunk.zero_grad_buffer()
 
-            calculate_entropy = self.config.entropy_coeff != 0
+            loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+            calculate_entropy = self.config.entropy_coeff != 0 or loss_mode == "aepo"
             if data.meta_info.get("micro_batch_size", None) is not None:
                 micro_batch_size = data.meta_info["micro_batch_size"]
             else:

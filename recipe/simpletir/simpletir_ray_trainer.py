@@ -51,36 +51,12 @@ from verl.trainer.ppo.ray_trainer import (
     # compute_advantage,
     compute_response_mask,
 )
+from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl.utils.tracking import ValidationGenerationsLogger
 from recipe.simpletir.ppo import core_algos
 from enum import Enum
 WorkerType = Type[Worker]
-
-
-def get_agent_helper_classes(adv_estimator):
-#     """
-#     Factory function to get the appropriate AgentHelper and GenerationConfig classes.
-    
-#     Args:
-#         use_aepo: If True, returns AEPO classes; otherwise returns standard GRPO classes.
-        
-#     Returns:
-#         Tuple of (AgentHelper class, GenerationConfig class)
-#     """
-    if adv_estimator == AdvantageEstimator.AEPO:
-        from recipe.simpletir.agent_utils_aepo import AgentHelper, GenerationConfig
-    else:
-        from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
-    return AgentHelper, GenerationConfig
-
-# def dataprotoitem_to_dataproto(item: DataProtoItem) -> DataProto:
-#     """Convert a DataProtoItem to a DataProto object"""
-#     return DataProto.from_dict(
-#         tensors=item.batch,  # TensorDict is already in correct format
-#         non_tensors=item.non_tensor_batch,  # Dict is already in correct format
-#         meta_info=item.meta_info,
-#     )
 
 
 import torch
@@ -315,7 +291,7 @@ def compute_timing_metrics(batch, timing_raw):
         },
     }
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, entropy=None, entropy_weight=0.2, enable_entropy_balanced_advantage=False, **kwargs):
+def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
     """Compute advantage estimates for policy optimization.
 
     This function computes advantage estimates using various estimators like GAE, GRPO, REINFORCE++, etc.
@@ -364,8 +340,10 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator == AdvantageEstimator.GRPO:
-        # TODO: test on more adv estimator type
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO):
+        # GRPO, AEPO, and GSPO use the same advantage computation
+        # AEPO's entropy balancing is handled in the loss function (compute_policy_loss_aepo)
+        # GSPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_gspo)
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
             # If multi-turn, replace the mask with the relevant part of loss_mask
@@ -441,33 +419,40 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
-    elif adv_estimator == AdvantageEstimator.AEPO:
-        # AEPO: Compute GRPO advantages and modify with entropy
-        aepo_config = kwargs.get("aepo_config", {})
-        entropy = data.batch.get("entropy", None)
-        entropy_weight = aepo_config.get("entropy_weight", 0.2)
-        enable_entropy_balanced_advantage = aepo_config.get("enable_entropy_balanced_advantage", False)
-        
+    elif adv_estimator == AdvantageEstimator.EMPG:
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
-            response_length = grpo_calculation_mask.size(1)
-            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]
-        
-        advantages, returns = core_algos.compute_aepo_outcome_advantage(
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=grpo_calculation_mask,
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch.get('traj_uid', None),
-            entropy=entropy if enable_entropy_balanced_advantage else None,
-            entropy_weight=entropy_weight if enable_entropy_balanced_advantage else 0.0,
+            traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
+        advantages, returns = core_algos.compute_EMPG_advantage(
+            batch=data,
+            )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
     else:
         raise NotImplementedError
     return data
 
+#* Newly added metrics
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
 
 class AdvantageEstimator(str, Enum):
     """
@@ -483,6 +468,8 @@ class AdvantageEstimator(str, Enum):
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
     AEPO = "aepo"  # Adaptive Entropy Policy Optimization
+    GSPO = "gspo"  # Group Sequence Policy Optimization
+    EMPG = 'empg'
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -531,6 +518,9 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.device_name="cuda"
+        
+        # if ref_in_actor is True, the reference policy will be actor without lora applied
+        self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
         # register wandb generation logger
         self.validation_generations_logger = {}
@@ -560,12 +550,24 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             AdvantageEstimator.GRPO_PASSK,
             AdvantageEstimator.GiGPO,
             AdvantageEstimator.AEPO,
+            AdvantageEstimator.GSPO,
+            AdvantageEstimator.EMPG,
         ]:
             self.use_critic = False
         else:
             raise NotImplementedError(
                 f"Unsupported advantage estimator: {self.config.algorithm.adv_estimator}"
             )
+
+        # Automatically set loss_mode to "aepo" when using AEPO advantage estimator
+        if adv_estimator == AdvantageEstimator.AEPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
+        
+        # Automatically set loss_mode to "gspo" when using GSPO advantage estimator
+        if adv_estimator == AdvantageEstimator.GSPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
 
         self._validate_config()
         self._create_dataloader()
@@ -989,10 +991,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         sample_data_source = []
 
         if self.config.agent.tool_use:
-            # Agent config preparation - use factory to get correct classes based on adv_estimator
-            adv_estimator = AdvantageEstimator(self.config.algorithm.adv_estimator)
-            AgentHelper, GenerationConfig = get_agent_helper_classes(adv_estimator)
-            
+            # Agent config preparation - use standard AgentHelper for all algorithms
             # Build config kwargs
             gen_config_kwargs = {
                 "max_turns": self.config.agent.max_turns,
@@ -1006,21 +1005,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 "append_final_answer_func": self.config.agent.append_final_answer_func,
             }
             
-            # Add AEPO-specific parameters if using AEPO
-            if adv_estimator == AdvantageEstimator.AEPO and hasattr(self.config.algorithm, "aepo"):
-                aepo_config = self.config.algorithm.aepo
-                gen_config_kwargs.update({
-                    "entropy_weight": aepo_config.get("entropy_weight", 0.5),
-                    "branch_probability": aepo_config.get("branch_probability", 0.5),
-                    "initial_rollouts": aepo_config.get("initial_rollouts", 1),
-                    "logprobs": aepo_config.get("logprobs", 10),
-                    "enable_dynamic_rollouts": aepo_config.get("enable_dynamic_rollouts", False),
-                    "initial_entropy_tokens": aepo_config.get("initial_entropy_tokens", 50),
-                    "dynamic_rollout_min": aepo_config.get("dynamic_rollout_min", 1),
-                    "dynamic_rollout_max": aepo_config.get("dynamic_rollout_max", None),
-                    "consecutive_branch_penalty": aepo_config.get("consecutive_branch_penalty", 0.05),
-                    "beam_size": aepo_config.get("beam_size", 2),
-                })
+            # Note: AEPO-specific rollout parameters removed - only advantage computation is kept
             
             gen_config = GenerationConfig(**gen_config_kwargs)
             generation_manager = AgentHelper(
@@ -1190,6 +1175,12 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         scores,
         gts=None,
         reward_extra_infos_dict=None,
+        input_ids_list=None,
+        output_ids_list=None,
+        log_probs=None,
+        old_log_probs=None,
+        entropy=None,
+        ref_log_probs=None,
         turn_counts=None,
         code_call_counts=None,
         dump_path="./generations",
@@ -1220,12 +1211,58 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         if code_call_counts is not None and len(code_call_counts) == n:
             base_data["num_code_calls"] = code_call_counts
 
+        #* Newly added metrics
+        analysis_data = {}
+        if input_ids_list is not None:
+            analysis_data["input_ids"] = to_jsonable(input_ids_list)
+        if output_ids_list is not None:
+            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        if log_probs is not None:
+            analysis_data["log_probs"] = to_jsonable(log_probs)
+        if old_log_probs is not None:
+            analysis_data["old_log_probs"] = to_jsonable(old_log_probs)
+        if entropy is not None:
+            analysis_data["entropy"] = to_jsonable(entropy)
+        if ref_log_probs is not None:
+            analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
+
+        
+
+        for k, v in reward_extra_infos_dict.items():
+            if len(v) == n:
+                base_data[k] = v
+
         with open(filename, "w") as f:
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if analysis_data is not None:
+                for j in range(log_probs.shape[0]):
+                    entry = {k: v[j] for k, v in analysis_data.items()}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         print(f"Dumped generations to {filename}")
+
+        # if gts is not None and len(gts) == n:
+        #     base_data["gt"] = gts
+
+        # if reward_extra_infos_dict is not None:
+        #     for k, v in reward_extra_infos_dict.items():
+        #         if len(v) == n:
+        #             base_data[k] = v
+
+        # if turn_counts is not None and len(turn_counts) == n:
+        #     base_data["num_turns"] = turn_counts
+
+        # if code_call_counts is not None and len(code_call_counts) == n:
+        #     base_data["num_code_calls"] = code_call_counts
+
+        # with open(filename, "w") as f:
+        #     for i in range(n):
+        #         entry = {k: v[i] for k, v in base_data.items()}
+        #         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        # print(f"Dumped generations to {filename}")
             
     def fit(self):
         """
@@ -1271,10 +1308,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         self.global_steps += 1
         last_val_metrics = None
         if self.config.agent.tool_use:
-            # Agent config preparation - use factory to get correct classes based on adv_estimator
-            adv_estimator = AdvantageEstimator(self.config.algorithm.adv_estimator)
-            AgentHelper, GenerationConfig = get_agent_helper_classes(adv_estimator)
-            
+            # Agent config preparation - use standard AgentHelper for all algorithms
             # Build config kwargs
             gen_config_kwargs = {
                 "max_turns": self.config.agent.max_turns,
@@ -1288,21 +1322,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 "append_final_answer_func": self.config.agent.append_final_answer_func,
             }
             
-            # Add AEPO-specific parameters if using AEPO
-            if adv_estimator == AdvantageEstimator.AEPO and hasattr(self.config.algorithm, "aepo"):
-                aepo_config = self.config.algorithm.aepo
-                gen_config_kwargs.update({
-                    "entropy_weight": aepo_config.get("entropy_weight", 0.5),
-                    "branch_probability": aepo_config.get("branch_probability", 0.5),
-                    "initial_rollouts": aepo_config.get("initial_rollouts", 1),
-                    "logprobs": aepo_config.get("logprobs", 10),
-                    "enable_dynamic_rollouts": aepo_config.get("enable_dynamic_rollouts", False),
-                    "initial_entropy_tokens": aepo_config.get("initial_entropy_tokens", 50),
-                    "dynamic_rollout_min": aepo_config.get("dynamic_rollout_min", 1),
-                    "dynamic_rollout_max": aepo_config.get("dynamic_rollout_max", None),
-                    "consecutive_branch_penalty": aepo_config.get("consecutive_branch_penalty", 0.05),
-                    "beam_size": aepo_config.get("beam_size", 2),
-                })
+            # Note: AEPO-specific rollout parameters removed - only advantage computation is kept
             
             gen_config = GenerationConfig(**gen_config_kwargs)
             generation_manager = AgentHelper(
@@ -1459,34 +1479,8 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                     # breakpoint()
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
-                        # Compute entropy if using AEPO
-                        adv_estimator_val = AdvantageEstimator(self.config.algorithm.adv_estimator)
-                        aepo_config = self.config.algorithm.get("aepo", {})
-                        calculate_entropy = (adv_estimator_val == AdvantageEstimator.AEPO and 
-                                           aepo_config.get("enable_entropy_balanced_advantage", False))
-                        
-                        # Compute log_prob and entropy if needed
-                        if calculate_entropy:
-                            # Set calculate_entropy in meta_info to avoid decorator issues with kwargs
-                            batch.meta_info["calculate_entropy"] = True
-                            result = self.actor_rollout_wg.compute_log_prob(batch)
-                            # Remove it after use
-                            batch.meta_info.pop("calculate_entropy", None)
-                            if isinstance(result, tuple) and len(result) == 2:
-                                # compute_log_prob returned (log_probs, entropy)
-                                old_log_prob, entropy_result = result
-                                batch = batch.union(old_log_prob)
-                                # Store entropy in batch for advantage computation and policy loss
-                                if entropy_result is not None:
-                                    batch.batch["entropy"] = entropy_result
-                            else:
-                                # Fallback: single return value
-                                old_log_prob = result
-                                batch = batch.union(old_log_prob)
-                        else:
-                            # Normal call without entropy
-                            old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
-                            batch = batch.union(old_log_prob)
+                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                        batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:
                         # compute reference log_prob
@@ -1764,9 +1758,6 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True) 
                         # Safely access gigpo config with defaults
                         gigpo_config = self.config.algorithm.get("gigpo", {})
-                        aepo_config = self.config.algorithm.get("aepo", {})
-                        # Get entropy from batch if available (for AEPO)
-                        entropy = batch.batch.get("entropy", None)
                         
                         batch = compute_advantage(
                             batch,
@@ -1783,10 +1774,6 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             gigpo_mode=gigpo_config.get("mode", "mean_std_norm"),
                             gigpo_enable_similarity=gigpo_config.get("enable_similarity", False),
                             gigpo_similarity_thresh=gigpo_config.get("similarity_thresh", 0.95),
-                            aepo_config=aepo_config,
-                            entropy=entropy,
-                            entropy_weight=aepo_config.get("entropy_weight", 0.2),
-                            enable_entropy_balanced_advantage=aepo_config.get("enable_entropy_balanced_advantage", True),
                         )
 
                     # update critic
@@ -1840,12 +1827,29 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                                     code_call_counts = None
                                 else:
                                     print(f"Code call counts per sample: {code_call_counts}")
-                            
+
+                            input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            output_ids_list = batch.batch["responses"].cpu().tolist()
+                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+
+                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            else:
+                                ref_log_probs = None
+
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
                                 scores=scores,
                                 reward_extra_infos_dict=extra_rewards_info,
+                                input_ids_list=input_ids_list,
+                                output_ids_list=output_ids_list,
+                                log_probs=log_probs,
+                                old_log_probs=old_log_probs,
+                                entropy=entropy,
+                                ref_log_probs=ref_log_probs,
                                 turn_counts=turn_counts,
                                 code_call_counts=code_call_counts,
                                 dump_path=rollout_data_dir,
