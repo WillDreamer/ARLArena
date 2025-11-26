@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -222,8 +222,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=4334
-DASHBOARD_PORT=4333
+PORT=5334
+DASHBOARD_PORT=5333
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT --num-gpus $NUM_GPUS
 RUN_NAME+="_$MODEL_NAME"
