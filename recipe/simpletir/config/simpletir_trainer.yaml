@@ -38,6 +38,7 @@ actor_rollout_ref:
     use_kl_loss: False
     kl_loss_coef: 0.0
     kl_loss_type: low_var_kl
+    kl_loss_update: False
     entropy_coeff: 0.0
     clip_ratio_high: 0.28
     clip_ratio_low: 0.2
@@ -88,28 +89,12 @@ algorithm:
   use_kl_in_reward: False
   kl_ctrl:
     kl_coef: 0.0
-  # Advantage estimator: use "aepo" for AEPO, "grpo" for standard GRPO, etc.
+  # Advantage estimator: use "aepo" for AEPO, "gspo" for GSPO, "grpo" for standard GRPO, etc.
   adv_estimator: grpo
   
   # AEPO-specific configuration (only used when algorithm.adv_estimator=aepo)
   # These parameters control the adaptive entropy-based rollout and branching behavior
   aepo:
-    # Core AEPO parameters
-    entropy_weight: 0.5           # Weight for entropy in branching decision (higher = more branching on uncertainty)
-    branch_probability: 0.5       # Base probability threshold for branching (0-1)
-    initial_rollouts: 1           # Initial number of rollouts per sample (if dynamic_rollouts disabled)
-    logprobs: 10                  # Number of top logprobs to request for entropy calculation
-    
-    # Dynamic initial rollouts (AEPO-specific feature)
-    enable_dynamic_rollouts: False  # If True, dynamically determines initial rollouts based on entropy
-    initial_entropy_tokens: 50     # Number of tokens to sample for initial entropy estimation
-    dynamic_rollout_min: 1         # Minimum initial rollouts when using dynamic mode
-    dynamic_rollout_max: null      # Maximum initial rollouts (null = no limit)
-    
-    # Branching control
-    consecutive_branch_penalty: 0.05  # Penalty factor for consecutive branches (0-1, higher = less consecutive branching)
-    beam_size: 2                      # Maximum branches to create from one sample
-    
-    # Entropy-balanced mechanisms for policy optimization
-    enable_entropy_balanced_advantage: True   # If True, modifies advantages based on normalized entropy
-    enable_entropy_balanced_clipping: True    # If True, stops gradients for high entropy tokens in clipping bounds
+  gspo:
+    # GSPO uses GRPO advantage computation, no additional parameters needed
+    # The sequence-level importance ratio is handled automatically in compute_policy_loss_gspo

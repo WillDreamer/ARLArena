@@ -180,84 +180,6 @@ def compute_grpo_outcome_advantage(
     return scores, scores
 
 
-def compute_aepo_outcome_advantage(
-    token_level_rewards: torch.Tensor,
-    response_mask: torch.Tensor,
-    index: np.ndarray,
-    traj_index: np.ndarray,
-    entropy: torch.Tensor = None,
-    entropy_weight: float = 0.2,
-    epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: bool = True,
-    compute_mean_std_cross_steps: bool = True,
-):
-    """
-    Compute advantage for AEPO (Adaptive Entropy Policy Optimization).
-    
-    AEPO first computes GRPO advantages, then modifies them based on token-level entropy.
-    Higher entropy (uncertainty) leads to adjusted advantages to encourage exploration.
-    
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape is (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape is (bs, response_length)
-        index: `(np.ndarray)`
-            Prompt indices for grouping
-        traj_index: `(np.ndarray)`
-            Trajectory indices
-        entropy: `(torch.Tensor, optional)`
-            Token-level entropy, shape is (bs, response_length). If None, AEPO behaves like GRPO.
-        entropy_weight: `(float)`
-            Weight for entropy-based advantage modification (default: 0.2)
-        epsilon: `(float)`
-            Small value for numerical stability
-        norm_adv_by_std_in_grpo: `(bool)`
-            Whether to normalize GRPO advantages by std
-        compute_mean_std_cross_steps: `(bool)`
-            Whether to compute mean/std across steps
-            
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape is (bs, response_length)
-        returns: `(torch.Tensor)`
-            shape is (bs, response_length)
-    """
-    # First compute GRPO advantages
-    advantages, returns = compute_grpo_outcome_advantage(
-        token_level_rewards=token_level_rewards,
-        response_mask=response_mask,
-        index=index,
-        traj_index=traj_index,
-        epsilon=epsilon,
-        norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        compute_mean_std_cross_steps=compute_mean_std_cross_steps,
-    )
-    
-    # Apply entropy-based modification if entropy is available
-    if entropy is not None and entropy_weight > 0:
-        # Normalize entropy: (entropy - mean) / std
-        valid_entropy = entropy * response_mask.float()
-        valid_entropy_flat = valid_entropy[response_mask.bool()]
-        
-        if len(valid_entropy_flat) > 0:
-            entropy_mean = valid_entropy_flat.mean()
-            entropy_std = valid_entropy_flat.std()
-            
-            # Avoid division by zero
-            if entropy_std == 0:
-                entropy_std = torch.tensor(1.0, device=entropy.device)
-            
-            # Normalize entropy
-            entropy_normalized = (entropy - entropy_mean) / entropy_std
-            
-            # Modify advantages based on normalized entropy
-            # Higher entropy (uncertainty) scales advantages
-            advantages = advantages * (1 + entropy_weight * entropy_normalized.detach())
-    
-    return advantages, returns
-
-
 def compute_grpo_passk_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -319,7 +241,56 @@ def compute_grpo_passk_outcome_advantage(
     advantages = advantages.unsqueeze(-1) * response_mask
     return advantages, advantages
 
+def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
+    """
+    Args:
+        tokenizer: The tokenizer for identifying response segments.
+        batch: A data batch with 'responses', 'old_entropy', 'advantages'.
+        k (float): Hyperparameter for self-calibrating gradient scaling.
+        k_f (float): Hyperparameter for the future clarity bonus.
+        zeta (float): Hyperparameter for the future clarity bonus.
+    """
 
+    # --- 1. Calculate Modulated Advantage Components ---
+    H = np.array(batch.batch['old_entropy'])
+    
+    # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
+    min_H, max_H = np.min(H), np.max(H)
+    H_norm = (H - min_H) / (max_H - min_H + 1e-8)
+
+    # Self-calibrating gradient scaling g(H) (Eq. 10)
+    g_H_unnormalized = np.exp(-k * H_norm)
+    mean_g_H = np.mean(g_H_unnormalized)
+    g_H = g_H_unnormalized / (mean_g_H + 1e-8)
+    
+    # Future clarity bonus f(H) (Eq. 11)
+    f_H = np.exp(-k_f * H_norm)
+
+    # Convert to tensors for PyTorch operations
+    g_H = torch.tensor(g_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+    f_H = torch.tensor(f_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+
+    # --- 2. Second Pass: Apply Advantage Modulation (Eq. 8) ---
+    step_advantages = []
+    for i, segment in enumerate(segments_to_modify):
+        idx, start, end = segment['sample_idx'], segment['start'], segment['end']
+        
+        # Apply self-calibrating gradient scaling
+        batch.batch['advantages'] *= g_H[i]
+        
+        # Add future clarity bonus if there is a next step
+        next_seg = segments_to_modify[i+1] if i+1 < len(segments_to_modify) else None
+        if next_seg and next_seg['sample_idx'] == idx:
+            batch.batch['advantages'][idx][start:end] += zeta * f_H[i+1]
+        step_advantages.append(batch.batch['advantages'][idx][start])
+            
+    # --- 3. Final Advantage Normalization (Eq. 7) ---
+    if step_advantages:
+        final_adv_mean = torch.mean(torch.stack(step_advantages))
+        batch.batch['advantages'] -= final_adv_mean
+
+    return batch.batch['advantages'], batch.batch['advantages']
+    
 def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
     """
     Compute advantage for RF++-baseline (https://arxiv.org/abs/2501.03262), operating only on Outcome reward
@@ -575,138 +546,6 @@ def compute_policy_loss(
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
-
-def compute_policy_loss_entropy_balanced_clipping(
-    old_log_prob,
-    log_prob,
-    entropy,
-    advantages,
-    response_mask,
-    enable_entropy_balanced_clipping,
-    enable_entropy_balanced_advantage,
-    cliprange=None,
-    cliprange_low=None,
-    cliprange_high=None,
-    clip_ratio_c=3.0,
-    loss_agg_mode="token-mean",
-):
-    """
-    Compute policy loss with entropy-balanced clipping and advantage modification.
-    
-    This implements AEPO's entropy-based mechanisms:
-    1. Entropy-balanced advantage: modifies advantages based on normalized entropy
-    2. Entropy-balanced clipping: stops gradients for high entropy tokens in clipping bounds
-    
-    Args:
-        old_log_prob: (torch.Tensor) shape: (bs, response_length)
-        log_prob: (torch.Tensor) shape: (bs, response_length)
-        entropy: (torch.Tensor) shape: (bs, response_length) - token-level entropy
-        advantages: (torch.Tensor) shape: (bs, response_length)
-        response_mask: (torch.Tensor) shape: (bs, response_length)
-        enable_entropy_balanced_clipping: (bool) If True, stops gradients for high entropy tokens
-        enable_entropy_balanced_advantage: (bool) If True, modifies advantages based on entropy
-        cliprange: (float) The clip range used in PPO
-        cliprange_low: (float) The lower clip range
-        cliprange_high: (float) The higher clip range
-        clip_ratio_c: (float) Lower bound of ratio for dual-clip PPO
-        loss_agg_mode: (str) Aggregation mode for loss
-        
-    Returns:
-        pg_loss: scalar torch.Tensor - policy gradient loss
-        pg_clipfrac: float - fraction of loss being clipped
-        ppo_kl: float - estimated KL divergence
-        pg_clipfrac_lower: float - fraction clipped when advantage is negative
-    """
-    # Apply entropy-based advantage modification
-    if enable_entropy_balanced_advantage and entropy is not None:
-        # Compute valid entropy positions
-        valid_entropy = entropy * response_mask.float()
-        valid_entropy_flat = valid_entropy[response_mask.bool()]
-        
-        if len(valid_entropy_flat) > 0:
-            entropy_mean = valid_entropy_flat.mean()
-            entropy_std = valid_entropy_flat.std()
-            
-            # Avoid division by zero
-            if entropy_std == 0:
-                entropy_std = torch.tensor(1.0, device=entropy.device)
-            
-            # Normalize entropy: (entropy - mean) / std
-            entropy_normalized = (entropy - entropy_mean) / entropy_std
-            
-            # Modify advantages based on normalized entropy (detached, no gradients)
-            advantages = advantages * (1 + 0.2 * entropy_normalized.detach())
-    
-    assert clip_ratio_c > 1.0, (
-        "The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0,"
-        + f" but get the value: {clip_ratio_c}."
-    )
-    
-    negative_approx_kl = log_prob - old_log_prob
-    ratio = torch.exp(negative_approx_kl)
-    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
-    
-    pg_losses1 = -advantages * ratio
-    
-    if cliprange_low is None:
-        cliprange_low = cliprange
-    if cliprange_high is None:
-        cliprange_high = cliprange
-    
-    # Entropy-balanced clipping: keep gradients when high entropy happens
-    if enable_entropy_balanced_clipping:
-        min_bound = torch.full_like(ratio, 1 - cliprange_low)
-        # Original AEPO formula: max_bound = (1 + cliprange_high) / ratio.detach() * ratio
-        # This keeps gradient through the final ratio multiplication but stops it in the denominator
-        # When high entropy happens, we want to keep gradient, so we conditionally detach
-        if entropy is not None:
-            # Normalize entropy to determine when to keep gradients
-            valid_entropy = entropy * response_mask.float()
-            valid_entropy_flat = valid_entropy[response_mask.bool()]
-            if len(valid_entropy_flat) > 0:
-                entropy_mean = valid_entropy_flat.mean()
-                entropy_std = valid_entropy_flat.std()
-                if entropy_std == 0:
-                    entropy_std = torch.tensor(1.0, device=entropy.device)
-                entropy_normalized = (entropy - entropy_mean) / entropy_std
-                
-                # When entropy is high (uncertainty > mean), keep gradient (use ratio), otherwise stop gradient (use ratio.detach())
-                # entropy_normalized > 0 means high entropy, so use ratio (keep gradient)
-                ratio_for_bound = torch.where(
-                    entropy_normalized > 0,
-                    ratio,  # High entropy: keep gradient
-                    ratio.detach()  # Low entropy: stop gradient
-                )
-                max_bound = (1 + cliprange_high) / ratio_for_bound * ratio
-            else:
-                # Fallback to original behavior
-                max_bound = (1 + cliprange_high) / ratio.detach() * ratio
-        else:
-            # Original AEPO behavior when entropy is not available
-            max_bound = (1 + cliprange_high) / ratio.detach() * ratio
-        pg_losses2 = -advantages * torch.clamp(ratio, min_bound, max_bound)
-    else:
-        pg_losses2 = -advantages * torch.clamp(
-            ratio, 1 - cliprange_low, 1 + cliprange_high
-        )
-    
-    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
-    pg_clipfrac = verl_F.masked_mean(
-        torch.gt(pg_losses2, pg_losses1).float(), response_mask
-    )
-    
-    pg_losses3 = -advantages * clip_ratio_c
-    clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
-    pg_clipfrac_lower = verl_F.masked_mean(
-        torch.gt(clip_pg_losses1, pg_losses3) * (advantages < 0).float(), response_mask
-    )
-    
-    pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
-    pg_loss = agg_loss(
-        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
-    )
-    
-    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
