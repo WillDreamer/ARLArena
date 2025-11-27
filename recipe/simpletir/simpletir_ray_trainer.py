@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from pprint import pprint
 from typing import Dict, Type
-
+import json
 import numpy as np
 from codetiming import Timer
 from omegaconf import OmegaConf, open_dict
@@ -48,22 +48,15 @@ from verl.trainer.ppo.ray_trainer import (
     RayPPOTrainer,
     ResourcePoolManager,
     Role,
-    compute_advantage,
+    # compute_advantage,
     compute_response_mask,
 )
+from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl.utils.tracking import ValidationGenerationsLogger
-
+from recipe.simpletir.ppo import core_algos
+from enum import Enum
 WorkerType = Type[Worker]
-
-
-def dataprotoitem_to_dataproto(item: DataProtoItem) -> DataProto:
-    """Convert a DataProtoItem to a DataProto object"""
-    return DataProto.from_dict(
-        tensors=item.batch,  # TensorDict is already in correct format
-        non_tensors=item.non_tensor_batch,  # Dict is already in correct format
-        meta_info=item.meta_info,
-    )
 
 
 import torch
@@ -214,19 +207,14 @@ def compute_data_metrics(batch, use_critic=True):
 
     # metrics for actions
     if "turns_stats" in batch.meta_info:
-        metrics["env/num_turns/mean"] = float(
-            np.array(batch.meta_info["turns_stats"], dtype=np.int16).mean()
-        )
-        metrics["env/num_turns/max"] = float(
-            np.array(batch.meta_info["turns_stats"], dtype=np.int16).max()
-        )
-        metrics["env/num_turns/min"] = float(
-            np.array(batch.meta_info["turns_stats"], dtype=np.int16).min()
-        )
+        turns_array = np.array(batch.meta_info["turns_stats"], dtype=np.int16)
+        metrics["env/num_turns/mean"] = float(turns_array.mean())
+        metrics["env/num_turns/max"] = float(turns_array.max())
+        metrics["env/num_turns/min"] = float(turns_array.min())
+        metrics["env/num_turns/std"] = float(turns_array.std())
+        metrics["env/num_turns/median"] = float(np.median(turns_array))
         # ratio of samples with 1 turn
-        metrics["env/num_one_turn"] = np.array(
-            batch.meta_info["turns_stats"], dtype=np.int16
-        ).tolist().count(1) / len(batch.meta_info["turns_stats"])
+        metrics["env/num_one_turn"] = turns_array.tolist().count(1) / len(turns_array)
     if "active_mask" in batch.meta_info:
         metrics["env/finish_ratio"] = 1 - float(
             np.array(batch.meta_info["active_mask"], dtype=np.int16).mean()
@@ -236,25 +224,32 @@ def compute_data_metrics(batch, use_critic=True):
             np.array(batch.meta_info["void_turn_mask"], dtype=np.int16).mean()
         )
     if "use_code_stats" in batch.meta_info:
-        metrics["env/num_code_use"] = float(
-            np.array(batch.meta_info["use_code_stats"], dtype=np.int16).mean()
-        )
-        metrics["env/code_use_ratio"] = float(
-            (
-                np.array(batch.meta_info["use_code_stats"], dtype=np.int16)
-                / np.array(batch.meta_info["turns_stats"], dtype=np.int16)
-            ).mean()
-        )
+        code_use_array = np.array(batch.meta_info["use_code_stats"], dtype=np.int16)
+        metrics["env/num_code_use/mean"] = float(code_use_array.mean())
+        metrics["env/num_code_use/max"] = float(code_use_array.max())
+        metrics["env/num_code_use/min"] = float(code_use_array.min())
+        metrics["env/num_code_use/std"] = float(code_use_array.std())
+        metrics["env/num_code_use/median"] = float(np.median(code_use_array))
+        # Keep backward compatibility
+        metrics["env/num_code_use"] = metrics["env/num_code_use/mean"]
+        if "turns_stats" in batch.meta_info:
+            metrics["env/code_use_ratio"] = float(
+                (
+                    code_use_array
+                    / np.array(batch.meta_info["turns_stats"], dtype=np.int16)
+                ).mean()
+            )
     if "valid_code_stats" in batch.meta_info:
-        metrics["env/num_valid_code"] = float(
-            np.array(batch.meta_info["valid_code_stats"], dtype=np.int16).mean()
-        )
-        metrics["env/valid_code_ratio"] = float(
-            (
-                np.array(batch.meta_info["valid_code_stats"], dtype=np.int16)
-                / np.array(batch.meta_info["turns_stats"], dtype=np.int16)
-            ).mean()
-        )
+        valid_code_array = np.array(batch.meta_info["valid_code_stats"], dtype=np.int16)
+        # Safety check: ensure array size matches batch size
+        if len(valid_code_array) == batch.batch.batch_size[0]:
+            metrics["env/num_valid_code"] = float(valid_code_array.mean())
+            if "turns_stats" in batch.meta_info:
+                turns_array = np.array(batch.meta_info["turns_stats"], dtype=np.int16)
+                if len(turns_array) == len(valid_code_array):
+                    metrics["env/valid_code_ratio"] = float(
+                        (valid_code_array / turns_array).mean()
+                    )
     if "success_code_lines" in batch.meta_info:
         metrics["env/success_code_lines"] = float(
             np.array(batch.meta_info["success_code_lines"], dtype=np.int16).mean()
@@ -296,6 +291,185 @@ def compute_timing_metrics(batch, timing_raw):
         },
     }
 
+def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
+    """Compute advantage estimates for policy optimization.
+
+    This function computes advantage estimates using various estimators like GAE, GRPO, REINFORCE++, etc.
+    The advantage estimates are used to guide policy optimization in RL algorithms.
+
+    Args:
+        data (DataProto): The data containing batched model outputs and inputs.
+        adv_estimator: The advantage estimator to use (e.g., GAE, GRPO, REINFORCE++).
+        gamma (float, optional): Discount factor for future rewards. Defaults to 1.0.
+        lam (float, optional): Lambda parameter for GAE. Defaults to 1.0.
+        num_repeat (int, optional): Number of times to repeat the computation. Defaults to 1.
+        multi_turn (bool, optional): Whether the data is from a multi-turn conversation. Defaults to False.
+        norm_adv_by_std_in_grpo (bool, optional): Whether to normalize advantages by standard deviation in GRPO. Defaults to True.
+
+    Returns:
+        DataProto: The updated data with computed advantages and returns.
+    """
+    # Back-compatible with trainers that do not compute response mask in fit
+    if "response_mask" not in data.batch:
+        data.batch["response_mask"] = compute_response_mask(data)
+    # Back-compatible with trainers that do not set traj_uid
+    if "traj_uid" not in data.non_tensor_batch:
+        # If traj_uid is missing, use uid as fallback (each sample is its own trajectory)
+        if "uid" in data.non_tensor_batch:
+            data.non_tensor_batch["traj_uid"] = data.non_tensor_batch["uid"]
+        else:
+            # If uid is also missing, create both
+            uids = np.array([str(uuid.uuid4()) for _ in range(len(data.batch))], dtype=object)
+            data.non_tensor_batch["uid"] = uids
+            data.non_tensor_batch["traj_uid"] = uids
+    # prepare response group
+    # TODO: add other ways to estimate advantages
+    if adv_estimator == AdvantageEstimator.GAE:
+        advantages, returns = core_algos.compute_gae_advantage_return(
+            token_level_rewards=data.batch["token_level_rewards"],
+            values=data.batch["values"],
+            response_mask=data.batch["response_mask"],
+            gamma=gamma,
+            lam=lam,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+        if kwargs.get("use_pf_ppo", False):
+            data = core_algos.compute_pf_ppo_reweight_data(
+                data,
+                kwargs.get("pf_ppo_reweight_method", "pow"),
+                kwargs.get("pf_ppo_weight_pow", 2.0),
+            )
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO):
+        # GRPO, AEPO, and GSPO use the same advantage computation
+        # AEPO's entropy balancing is handled in the loss function (compute_policy_loss_aepo)
+        # GSPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_gspo)
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.GRPO_PASSK:
+        advantages, returns = core_algos.compute_grpo_passk_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=data.batch["response_mask"],
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE:
+        advantages, returns = core_algos.compute_reinforce_plus_plus_baseline_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=data.batch["response_mask"],
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
+        advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=data.batch["response_mask"],
+            gamma=gamma,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.REMAX:
+        advantages, returns = core_algos.compute_remax_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            reward_baselines=data.batch["reward_baselines"],
+            response_mask=data.batch["response_mask"],
+        )
+
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.RLOO:
+        advantages, returns = core_algos.compute_rloo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=data.batch["response_mask"],
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.GiGPO:
+        advantages, returns = core_algos.compute_gigpo_outcome_advantage(
+            token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
+            step_rewards=data.batch['step_rewards'], # for step group reward computing
+            response_mask=data.batch['response_mask'],
+            anchor_obs=data.non_tensor_batch['anchor_obs'],
+            index=data.non_tensor_batch['uid'],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            step_advantage_w=step_advantage_w,
+            mode=gigpo_mode,
+            enable_similarity=gigpo_enable_similarity,
+            similarity_thresh=gigpo_similarity_thresh,
+            )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.EMPG:
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+        advantages, returns = core_algos.compute_EMPG_advantage(
+            batch=data,
+            )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+    else:
+        raise NotImplementedError
+    return data
+
+#* Newly added metrics
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
+
+class AdvantageEstimator(str, Enum):
+    """
+    Using an enumeration class to avoid spelling errors in adv_estimator
+    """
+
+    GAE = "gae"
+    GRPO = "grpo"
+    REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
+    REINFORCE_PLUS_PLUS_BASELINE = "reinforce_plus_plus_baseline"
+    REMAX = "remax"
+    RLOO = "rloo"
+    GRPO_PASSK = "grpo_passk"
+    GiGPO = 'gigpo'
+    AEPO = "aepo"  # Adaptive Entropy Policy Optimization
+    GSPO = "gspo"  # Group Sequence Policy Optimization
+    EMPG = 'empg'
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -344,6 +518,9 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         self.use_rm = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
         self.device_name="cuda"
+        
+        # if ref_in_actor is True, the reference policy will be actor without lora applied
+        self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
         # register wandb generation logger
         self.validation_generations_logger = {}
@@ -360,17 +537,37 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 config.algorithm.kl_ctrl
             )
 
-        if self.config.algorithm.adv_estimator == AdvantageEstimator.GAE:
+        # Convert config value to enum for consistent comparison
+        adv_estimator = AdvantageEstimator(self.config.algorithm.adv_estimator)
+        if adv_estimator == AdvantageEstimator.GAE:
             self.use_critic = True
-        elif self.config.algorithm.adv_estimator in [
+        elif adv_estimator in [
             AdvantageEstimator.GRPO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS,
+            AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
+            AdvantageEstimator.GRPO_PASSK,
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.AEPO,
+            AdvantageEstimator.GSPO,
+            AdvantageEstimator.EMPG,
         ]:
             self.use_critic = False
         else:
-            raise NotImplementedError
+            raise NotImplementedError(
+                f"Unsupported advantage estimator: {self.config.algorithm.adv_estimator}"
+            )
+
+        # Automatically set loss_mode to "aepo" when using AEPO advantage estimator
+        if adv_estimator == AdvantageEstimator.AEPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
+        
+        # Automatically set loss_mode to "gspo" when using GSPO advantage estimator
+        if adv_estimator == AdvantageEstimator.GSPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
 
         self._validate_config()
         self._create_dataloader()
@@ -794,19 +991,23 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         sample_data_source = []
 
         if self.config.agent.tool_use:
-            # Agent config preparation
-            gen_config = GenerationConfig(
-                max_turns=self.config.agent.max_turns,
-                max_start_length=self.config.data.max_start_length,
-                max_prompt_length=self.config.data.max_prompt_length,
-                max_response_length=self.config.data.max_response_length,
-                max_obs_length=self.config.data.max_obs_length,
-                num_gpus=self.config.trainer.n_gpus_per_node
-                * self.config.trainer.nnodes,
-                rollout_n=1,
-                mask_void_turns=False,  # no void turn masking during validation
-                append_final_answer_func=self.config.agent.append_final_answer_func,
-            )
+            # Agent config preparation - use standard AgentHelper for all algorithms
+            # Build config kwargs
+            gen_config_kwargs = {
+                "max_turns": self.config.agent.max_turns,
+                "max_start_length": self.config.data.max_start_length,
+                "max_prompt_length": self.config.data.max_prompt_length,
+                "max_response_length": self.config.data.max_response_length,
+                "max_obs_length": self.config.data.max_obs_length,
+                "num_gpus": self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes,
+                "rollout_n": 1,
+                "mask_void_turns": False,  # no void turn masking during validation
+                "append_final_answer_func": self.config.agent.append_final_answer_func,
+            }
+            
+            # Note: AEPO-specific rollout parameters removed - only advantage computation is kept
+            
+            gen_config = GenerationConfig(**gen_config_kwargs)
             generation_manager = AgentHelper(
                 tokenizer=self.tokenizer,
                 actor_rollout_wg=self.actor_rollout_wg,
@@ -967,6 +1168,102 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
 
         return metric_dict
 
+    def _dump_generations(
+        self,
+        inputs,
+        outputs,
+        scores,
+        gts=None,
+        reward_extra_infos_dict=None,
+        input_ids_list=None,
+        output_ids_list=None,
+        log_probs=None,
+        old_log_probs=None,
+        entropy=None,
+        ref_log_probs=None,
+        turn_counts=None,
+        code_call_counts=None,
+        dump_path="./generations",
+    ):
+        """Dump rollout/validation samples as JSONL."""
+        os.makedirs(dump_path, exist_ok=True)
+        filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
+
+        n = len(inputs)
+        base_data = {
+            "input": inputs,
+            "output": outputs,
+            "score": scores,
+            "step": [self.global_steps] * n,
+        }
+
+        if gts is not None and len(gts) == n:
+            base_data["gt"] = gts
+
+        if reward_extra_infos_dict is not None:
+            for k, v in reward_extra_infos_dict.items():
+                if len(v) == n:
+                    base_data[k] = v
+
+        if turn_counts is not None and len(turn_counts) == n:
+            base_data["num_turns"] = turn_counts
+
+        if code_call_counts is not None and len(code_call_counts) == n:
+            base_data["num_code_calls"] = code_call_counts
+
+        #* Newly added metrics
+        analysis_data = {}
+        if input_ids_list is not None:
+            analysis_data["input_ids"] = to_jsonable(input_ids_list)
+        if output_ids_list is not None:
+            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        if log_probs is not None:
+            analysis_data["log_probs"] = to_jsonable(log_probs)
+        if old_log_probs is not None:
+            analysis_data["old_log_probs"] = to_jsonable(old_log_probs)
+        if entropy is not None:
+            analysis_data["entropy"] = to_jsonable(entropy)
+        if ref_log_probs is not None:
+            analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
+
+        
+
+        for k, v in reward_extra_infos_dict.items():
+            if len(v) == n:
+                base_data[k] = v
+
+        with open(filename, "w") as f:
+            for i in range(n):
+                entry = {k: v[i] for k, v in base_data.items()}
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if analysis_data is not None:
+                for j in range(log_probs.shape[0]):
+                    entry = {k: v[j] for k, v in analysis_data.items()}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        print(f"Dumped generations to {filename}")
+
+        # if gts is not None and len(gts) == n:
+        #     base_data["gt"] = gts
+
+        # if reward_extra_infos_dict is not None:
+        #     for k, v in reward_extra_infos_dict.items():
+        #         if len(v) == n:
+        #             base_data[k] = v
+
+        # if turn_counts is not None and len(turn_counts) == n:
+        #     base_data["num_turns"] = turn_counts
+
+        # if code_call_counts is not None and len(code_call_counts) == n:
+        #     base_data["num_code_calls"] = code_call_counts
+
+        # with open(filename, "w") as f:
+        #     for i in range(n):
+        #         entry = {k: v[i] for k, v in base_data.items()}
+        #         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        # print(f"Dumped generations to {filename}")
+            
     def fit(self):
         """
         The training loop of PPO.
@@ -1011,19 +1308,23 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         self.global_steps += 1
         last_val_metrics = None
         if self.config.agent.tool_use:
-            # Agent config preparation
-            gen_config = GenerationConfig(
-                max_turns=self.config.agent.max_turns,
-                max_start_length=self.config.data.max_start_length,
-                max_prompt_length=self.config.data.max_prompt_length,
-                max_response_length=self.config.data.max_response_length,
-                max_obs_length=self.config.data.max_obs_length,
-                num_gpus=self.config.trainer.n_gpus_per_node
-                * self.config.trainer.nnodes,
-                rollout_n=self.config.actor_rollout_ref.rollout.n,
-                mask_void_turns=True,
-                append_final_answer_func=self.config.agent.append_final_answer_func,
-            )
+            # Agent config preparation - use standard AgentHelper for all algorithms
+            # Build config kwargs
+            gen_config_kwargs = {
+                "max_turns": self.config.agent.max_turns,
+                "max_start_length": self.config.data.max_start_length,
+                "max_prompt_length": self.config.data.max_prompt_length,
+                "max_response_length": self.config.data.max_response_length,
+                "max_obs_length": self.config.data.max_obs_length,
+                "num_gpus": self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes,
+                "rollout_n": self.config.actor_rollout_ref.rollout.n,
+                "mask_void_turns": True,
+                "append_final_answer_func": self.config.agent.append_final_answer_func,
+            }
+            
+            # Note: AEPO-specific rollout parameters removed - only advantage computation is kept
+            
+            gen_config = GenerationConfig(**gen_config_kwargs)
             generation_manager = AgentHelper(
                 tokenizer=self.tokenizer,
                 actor_rollout_wg=self.actor_rollout_wg,
@@ -1175,7 +1476,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                     batch.meta_info["global_token_num"] = torch.sum(
                         batch.batch["attention_mask"], dim=-1
                     ).tolist()
-
+                    # breakpoint()
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
@@ -1301,6 +1602,12 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                                             - num_larger_than_max
                                             < min_rollout_n
                                         ):
+                                            print(f"The mean of response lengths is larger than max_response_length for uid: {uid}")
+                                            print(f"The mean of response lengths is {uid_response_lenghts.mean()}")
+                                            print(f"The max of response lengths is {uid_response_lenghts.max()}")
+                                            print(f"The min of response lengths is {uid_response_lenghts.min()}")
+                                            print(f"The max_response_length is {max_response_length}")
+                                            print(len(uid_response_lenghts), num_larger_than_max, min_rollout_n)
                                             valid_mask[uid_mask] = False
                                             is_filtered = True
                                             over_long_all += 1
@@ -1328,12 +1635,34 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             or self.config.trainer.remove_clip
                         ):
                             # If no valid samples remain, skip this batch and get a new one
+                            print(f"valid_mask: {valid_mask}")
+                            print(f"Batch size: {len(uids)}, Unique UIDs: {len(unique_uids)}")
+                            print(f"Reward stats - mean: {reward_tensor.sum(-1).mean():.4f}, std: {reward_tensor.sum(-1).std():.4f}")
+                            print(f"Response length stats - mean: {response_lengths.float().mean():.1f}, max: {response_lengths.max()}")
                             if not valid_mask.any():
                                 print("No valid samples remain, skip this batch")
                                 continue
 
                             # Filter batch to keep only valid samples
                             batch = batch[valid_mask]
+                            
+                            # Filter stats arrays in meta_info to match filtered batch size
+                            valid_mask_np = valid_mask.cpu().numpy() if isinstance(valid_mask, torch.Tensor) else np.array(valid_mask)
+                            
+                            # List of stats arrays that need to be filtered
+                            stats_keys_to_filter = ["turns_stats", "use_code_stats", "valid_code_stats", "active_mask", "void_turn_mask"]
+                            
+                            for stats_key in stats_keys_to_filter:
+                                if stats_key in batch.meta_info:
+                                    stats_array = np.array(batch.meta_info[stats_key])
+                                    # Only filter if the array size matches the original batch size
+                                    if len(stats_array) == len(valid_mask_np):
+                                        # Filter the array
+                                        if stats_array.ndim == 1:
+                                            batch.meta_info[stats_key] = stats_array[valid_mask_np].tolist()
+                                        else:
+                                            # For multi-dimensional arrays, filter along first dimension
+                                            batch.meta_info[stats_key] = stats_array[valid_mask_np].tolist()
                             
                             # batch = dataprotoitem_to_dataproto(batch)
 
@@ -1418,14 +1747,33 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             batch.batch["token_level_rewards"] = batch.batch[
                                 "token_level_scores"
                             ]
-
+                        if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
+                            step_rewards_tensor = core_algos.compute_step_discounted_returns(
+                                batch=batch,
+                                gamma=self.config.algorithm.gamma
+                            )
+                            batch.batch['step_rewards'] = step_rewards_tensor
+                        # breakpoint()
                         # compute advantages, executed on the driver process
+                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True) 
+                        # Safely access gigpo config with defaults
+                        gigpo_config = self.config.algorithm.get("gigpo", {})
+                        
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
                             gamma=self.config.algorithm.gamma,
                             lam=self.config.algorithm.lam,
                             num_repeat=self.config.actor_rollout_ref.rollout.n,
+                            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                            multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
+                            use_pf_ppo=self.config.algorithm.use_pf_ppo,
+                            pf_ppo_reweight_method=self.config.algorithm.pf_ppo.reweight_method,
+                            pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
+                            step_advantage_w=gigpo_config.get("step_advantage_w", 1.0),
+                            gigpo_mode=gigpo_config.get("mode", "mean_std_norm"),
+                            gigpo_enable_similarity=gigpo_config.get("enable_similarity", False),
+                            gigpo_similarity_thresh=gigpo_config.get("similarity_thresh", 0.95),
                         )
 
                     # update critic
@@ -1446,7 +1794,66 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             actor_output.meta_info["metrics"]
                         )
                         metrics.update(actor_output_metrics)
+                    # breakpoint()
+                    # Log rollout generations if enabled
+                    rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+                    if rollout_data_dir:
+                        with _timer("dump_rollout_generations", timing_raw):
+                            print(batch.batch.keys())
+                            # Extract prompt only (remove response part from input_ids)
+                            response_length = batch.batch["responses"].shape[-1]
+                            prompt_ids = batch.batch["input_ids"][:, :-response_length]
+                            inputs = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
+                            outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+                            scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            
+                            # Extract turn counts and code usage stats if available
+                            turn_counts = None
+                            code_call_counts = None
+                            if "turns_stats" in batch.meta_info:
+                                turn_counts = batch.meta_info["turns_stats"]
+                                # Ensure turn_counts matches batch size (handle potential repeat mismatches)
+                                if len(turn_counts) != len(inputs):
+                                    print(f"Warning: turn_counts length ({len(turn_counts)}) doesn't match batch size ({len(inputs)}). Skipping turn counts.")
+                                    turn_counts = None
+                                else:
+                                    print(f"Turn counts per sample: {turn_counts}")
+                            
+                            if "use_code_stats" in batch.meta_info:
+                                code_call_counts = batch.meta_info["use_code_stats"]
+                                # Ensure code_call_counts matches batch size
+                                if len(code_call_counts) != len(inputs):
+                                    print(f"Warning: code_call_counts length ({len(code_call_counts)}) doesn't match batch size ({len(inputs)}). Skipping code call counts.")
+                                    code_call_counts = None
+                                else:
+                                    print(f"Code call counts per sample: {code_call_counts}")
 
+                            input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            output_ids_list = batch.batch["responses"].cpu().tolist()
+                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+
+                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            else:
+                                ref_log_probs = None
+
+                            self._dump_generations(
+                                inputs=inputs,
+                                outputs=outputs,
+                                scores=scores,
+                                reward_extra_infos_dict=extra_rewards_info,
+                                input_ids_list=input_ids_list,
+                                output_ids_list=output_ids_list,
+                                log_probs=log_probs,
+                                old_log_probs=old_log_probs,
+                                entropy=entropy,
+                                ref_log_probs=ref_log_probs,
+                                turn_counts=turn_counts,
+                                code_call_counts=code_call_counts,
+                                dump_path=rollout_data_dir,
+                            )
                     # validate
                     if (
                         self.val_reward_fn is not None

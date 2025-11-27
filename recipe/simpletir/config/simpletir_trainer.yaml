@@ -38,6 +38,7 @@ actor_rollout_ref:
     use_kl_loss: False
     kl_loss_coef: 0.0
     kl_loss_type: low_var_kl
+    kl_loss_update: False
     entropy_coeff: 0.0
     clip_ratio_high: 0.28
     clip_ratio_low: 0.2
@@ -79,12 +80,21 @@ critic:
 reward_model:
   reward_manager: math
 
+agent:
+  tool_use: True
+  max_turns: 5
+  append_final_answer_func: False
+
 algorithm:
   use_kl_in_reward: False
   kl_ctrl:
     kl_coef: 0.0
-
-agent:
-  tool_use: True
-  max_turns: 5
-  append_final_answer_func: True
+  # Advantage estimator: use "aepo" for AEPO, "gspo" for GSPO, "grpo" for standard GRPO, etc.
+  adv_estimator: grpo
+  
+  # AEPO-specific configuration (only used when algorithm.adv_estimator=aepo)
+  # These parameters control the adaptive entropy-based rollout and branching behavior
+  aepo:
+  gspo:
+    # GSPO uses GRPO advantage computation, no additional parameters needed
+    # The sequence-level importance ratio is handled automatically in compute_policy_loss_gspo

@@ -42,14 +42,23 @@ def ppo_loss(config: ActorConfig, model_output, data):
     loss_mode = config.policy_loss.get("loss_mode", "vanilla")
 
     policy_loss_fn = get_policy_loss_fn(loss_mode)
-    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
-        old_log_prob=old_log_prob,
-        log_prob=log_prob,
-        advantages=advantages,
-        response_mask=response_mask,
-        loss_agg_mode=loss_agg_mode,
-        config=config,
-    )
+    # AEPO requires entropy, pass it when loss_mode is "aepo"
+    policy_loss_kwargs = {
+        "old_log_prob": old_log_prob,
+        "log_prob": log_prob,
+        "advantages": advantages,
+        "response_mask": response_mask,
+        "loss_agg_mode": loss_agg_mode,
+        "config": config,
+    }
+    if loss_mode == "aepo":
+        if entropy is None:
+            raise ValueError(
+                "AEPO policy loss requires entropy, but entropy is None. "
+                "Please ensure entropy is computed and passed in model_output."
+            )
+        policy_loss_kwargs["entropy"] = entropy
+    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(**policy_loss_kwargs)
 
     metrics.update(
         {
