@@ -172,7 +172,7 @@ class AceCoderRewardManager:
         end = time.time()
         print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
         # the script will dump the results into the output_file, read it and parse it as a list
-        with open(output_file, "wr") as f:
+        with open(output_file, "w") as f:
             all_samples_results = [json.loads(x) for x in f]
         pass_rates = [x['eval_results']['pass_rate'] for x in all_samples_results]
         # print the error statistics
