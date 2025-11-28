@@ -163,7 +163,7 @@ class AceCoderRewardManager:
             for sample in samples:
                 f.write(json.dumps(sample) + "\n")
         # perform batched scoring for coding score: call the acecoder evaluation script to retrieve the coder part scores
-        output_file = temp_file
+        output_file = Path(temp_file).with_suffix(f".eval_results_binary.jsonl").absolute()
         command = f"python -m acecoder.eval_test_cases --samples {temp_file} --n_workers {self.n_workers} \
             --extract_solution True --output_file {output_file} --test_details True \
             --i_just_wanna_run True --min_time_limit 1 --gt_time_limit_factor 1"
@@ -172,7 +172,7 @@ class AceCoderRewardManager:
         end = time.time()
         print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
         # the script will dump the results into the output_file, read it and parse it as a list
-        with open(output_file, "w") as f:
+        with open(output_file, "r") as f:
             all_samples_results = [json.loads(x) for x in f]
         pass_rates = [x['eval_results']['pass_rate'] for x in all_samples_results]
         # print the error statistics
