@@ -1333,6 +1333,106 @@ def compute_policy_loss_aepo(
     
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
+@register_policy_loss("sapo")
+def compute_policy_loss_sapo(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = "seq-mean-token-mean",
+    config: Optional[DictConfig | ActorConfig] = None,
+    rollout_log_probs=None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Soft Adaptive Policy Optimization (SAPO) loss.
+
+    Implements Eq. (5)–(6)/(10)–(12) from "Soft Adaptive Policy Optimization" (arXiv:2511.20347):
+        J(θ) = E[ (1/G) Σ_i (1/|y_i|) Σ_t f_i,t(r_i,t(θ)) * A_i,t^b ]
+
+    with token-level gate:
+        f_i,t(r) = (4 / τ_i) * σ(τ_i (r - 1)),
+
+    and sequence-level temperature:
+        τ_i = τ_pos if A_i^b > 0 else τ_neg.
+
+    Args:
+        old_log_prob:   (B, T) log π_old
+        log_prob:       (B, T) log π_new
+        advantages:     (B, T) group-normalized advantages (usually constant across tokens of a sequence)
+        response_mask:  (B, T) mask for response tokens
+        loss_agg_mode:  aggregation mode; "seq-mean-token-mean" matches Eq. (5) exactly
+        config:         ActorConfig with fields:
+                          - clip_ratio, clip_ratio_low, clip_ratio_high (for logging only)
+                          - sapo_tau_pos (default 1.0)
+                          - sapo_tau_neg (default 2.0, should be > sapo_tau_pos)
+                          - sapo_epsilon (default 1e-8)
+        rollout_log_probs: optional behavior-policy log-probs (for TIS, not part of the original SAPO paper)
+    """
+
+    assert config is not None
+    assert isinstance(config, ActorConfig)
+    # --- PPO-style band, used ONLY for diagnostics (SAPO itself has no hard clipping) ---
+    clip_ratio = config.clip_ratio
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
+
+    # --- SAPO hyperparameters: τ_neg > τ_pos for faster decay on negative sequences (Sec. 3) ---
+    tau_pos = getattr(config, "sapo_tau_pos", 1.0)
+    tau_neg = getattr(config, "sapo_tau_neg", 1.04)
+    eps = getattr(config, "sapo_epsilon", 1e-8)
+
+    # --- Token-level importance ratios r_i,t(θ) (Eq. (2)) ---
+    negative_approx_kl = log_prob - old_log_prob          # log r_i,t
+    negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
+    ratio = torch.exp(negative_approx_kl)                  # r_i,t
+
+    # Approx KL for logging (same as GRPO/GSPO-style metrics)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+
+    # --- Sequence-level advantages A_i^b (mean over tokens; equals A_i when broadcast) ---
+    mask_f = response_mask.float()
+    seq_lengths = mask_f.sum(dim=-1).clamp(min=1.0)        # |y_i|, shape (B,)
+
+    adv_seq = (advantages * mask_f).sum(dim=-1) / seq_lengths   # (B,)
+
+    # τ_i = τ_pos if A_i > 0 else τ_neg  (Eq. (12))
+    tau_pos_tensor = torch.full_like(adv_seq, tau_pos)
+    tau_neg_tensor = torch.full_like(adv_seq, tau_neg)
+    tau_seq = torch.where(adv_seq > 0, tau_pos_tensor, tau_neg_tensor)   # (B,)
+
+    # Broadcast τ_i over tokens
+    tau = tau_seq.unsqueeze(-1)                                         # (B, 1) -> (B, T)
+
+    # --- SAPO gate: f_i,t(r) = (4 / τ_i) * σ(τ_i (r - 1))  (Eq. (6)/(12)) ---
+    delta = ratio - 1.0
+    p = torch.sigmoid(tau * delta)                                      # σ(τ_i (r_i,t - 1))
+    gate = 4.0 * p / (tau + eps)                                        # f_i,t(r_i,t)
+
+    # --- Surrogate per-token loss: -f_i,t(r_i,t) * A_i,t^b  (Eq. (5)/(10)) ---
+    pg_losses = -gate * advantages                                      # (B, T)
+
+    # --- (Optional) Truncated importance sampling (not in original SAPO, but harmless if disabled) ---
+    if getattr(config, "tis_imp_ratio_cap", 0.0) > 0 and rollout_log_probs is not None:
+        tis_imp_ratio = torch.exp(old_log_prob - rollout_log_probs)
+        tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
+        pg_losses = pg_losses * tis_imp_ratio
+
+    # --- Aggregate loss; "seq-mean-token-mean" matches 1/|y_i| Σ_t, then average over sequences ---
+    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+    # --- Diagnostics: fraction of tokens whose ratio lies outside a PPO-style band ---
+    upper_band = 1.0 + clip_ratio_high
+    lower_band = 1.0 - clip_ratio_low
+
+    high = (ratio > upper_band).float()
+    low = (ratio < lower_band).float()
+
+    pg_clipfrac = verl_F.masked_mean(high, response_mask)       # “too high” ratio fraction
+    pg_clipfrac_lower = verl_F.masked_mean(low, response_mask)  # “too low” ratio fraction
+
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
+
+
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
     """Compute categorical entropy loss (For backward compatibility)
