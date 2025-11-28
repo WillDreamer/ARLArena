@@ -291,7 +291,7 @@ def compute_timing_metrics(batch, timing_raw):
         },
     }
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
+def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, **kwargs):
     """Compute advantage estimates for policy optimization.
 
     This function computes advantage estimates using various estimators like GAE, GRPO, REINFORCE++, etc.
@@ -312,16 +312,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
     # Back-compatible with trainers that do not compute response mask in fit
     if "response_mask" not in data.batch:
         data.batch["response_mask"] = compute_response_mask(data)
-    # Back-compatible with trainers that do not set traj_uid
-    if "traj_uid" not in data.non_tensor_batch:
-        # If traj_uid is missing, use uid as fallback (each sample is its own trajectory)
-        if "uid" in data.non_tensor_batch:
-            data.non_tensor_batch["traj_uid"] = data.non_tensor_batch["uid"]
-        else:
-            # If uid is also missing, create both
-            uids = np.array([str(uuid.uuid4()) for _ in range(len(data.batch))], dtype=object)
-            data.non_tensor_batch["uid"] = uids
-            data.non_tensor_batch["traj_uid"] = uids
     # prepare response group
     # TODO: add other ways to estimate advantages
     if adv_estimator == AdvantageEstimator.GAE:
@@ -340,10 +330,11 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO):
-        # GRPO, AEPO, and GSPO use the same advantage computation
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO):
+        # GRPO, AEPO, GSPO, and SAPO use the same advantage computation
         # AEPO's entropy balancing is handled in the loss function (compute_policy_loss_aepo)
         # GSPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_gspo)
+        # SAPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_sapo)
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
             # If multi-turn, replace the mask with the relevant part of loss_mask
@@ -354,7 +345,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=grpo_calculation_mask,
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
@@ -364,7 +354,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=data.batch["response_mask"],
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
@@ -374,7 +363,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=data.batch["response_mask"],
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
@@ -400,25 +388,9 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=data.batch["response_mask"],
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.GiGPO:
-        advantages, returns = core_algos.compute_gigpo_outcome_advantage(
-            token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
-            step_rewards=data.batch['step_rewards'], # for step group reward computing
-            response_mask=data.batch['response_mask'],
-            anchor_obs=data.non_tensor_batch['anchor_obs'],
-            index=data.non_tensor_batch['uid'],
-            traj_index=data.non_tensor_batch['traj_uid'],
-            step_advantage_w=step_advantage_w,
-            mode=gigpo_mode,
-            enable_similarity=gigpo_enable_similarity,
-            similarity_thresh=gigpo_similarity_thresh,
-            )
-        data.batch['advantages'] = advantages
-        data.batch['returns'] = returns
     elif adv_estimator == AdvantageEstimator.EMPG:
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
@@ -430,7 +402,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=grpo_calculation_mask,
             index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
@@ -466,9 +437,9 @@ class AdvantageEstimator(str, Enum):
     REMAX = "remax"
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
-    GiGPO = 'gigpo'
     AEPO = "aepo"  # Adaptive Entropy Policy Optimization
     GSPO = "gspo"  # Group Sequence Policy Optimization
+    SAPO = "sapo"  # Sequence-level Adaptive Policy Optimization
     EMPG = 'empg'
 
 @contextmanager
@@ -548,9 +519,9 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.GRPO_PASSK,
-            AdvantageEstimator.GiGPO,
             AdvantageEstimator.AEPO,
             AdvantageEstimator.GSPO,
+            AdvantageEstimator.SAPO,
             AdvantageEstimator.EMPG,
         ]:
             self.use_critic = False
@@ -568,6 +539,11 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         if adv_estimator == AdvantageEstimator.GSPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
+        
+        # Automatically set loss_mode to "sapo" when using SAPO advantage estimator
+        if adv_estimator == AdvantageEstimator.SAPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "sapo"
 
         self._validate_config()
         self._create_dataloader()
@@ -1747,17 +1723,9 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             batch.batch["token_level_rewards"] = batch.batch[
                                 "token_level_scores"
                             ]
-                        if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
-                            step_rewards_tensor = core_algos.compute_step_discounted_returns(
-                                batch=batch,
-                                gamma=self.config.algorithm.gamma
-                            )
-                            batch.batch['step_rewards'] = step_rewards_tensor
                         # breakpoint()
                         # compute advantages, executed on the driver process
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True) 
-                        # Safely access gigpo config with defaults
-                        gigpo_config = self.config.algorithm.get("gigpo", {})
                         
                         batch = compute_advantage(
                             batch,
@@ -1770,10 +1738,6 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                             use_pf_ppo=self.config.algorithm.use_pf_ppo,
                             pf_ppo_reweight_method=self.config.algorithm.pf_ppo.reweight_method,
                             pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
-                            step_advantage_w=gigpo_config.get("step_advantage_w", 1.0),
-                            gigpo_mode=gigpo_config.get("mode", "mean_std_norm"),
-                            gigpo_enable_similarity=gigpo_config.get("enable_similarity", False),
-                            gigpo_similarity_thresh=gigpo_config.get("similarity_thresh", 0.95),
                         )
 
                     # update critic
