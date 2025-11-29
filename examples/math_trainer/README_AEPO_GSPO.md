@@ -59,7 +59,7 @@ elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, Advanta
 
 **Note**: AEPO and GSPO use the same advantage computation as GRPO. The difference is in the loss function, which is handled automatically by verl when `loss_mode` is set correctly.
 
-### Step 3: Add Logic in __init__ Method
+### Step 3: Add Logic in __init__ Method (Math)
 
 In your trainer's `__init__` method, add logic to automatically set `loss_mode` when AEPO or GSPO is used:
 
@@ -112,6 +112,8 @@ def __init__(
     
     # ... rest of initialization ...
 ```
+
+
 
 **Key Points**:
 - When `adv_estimator` is set to `"aepo"`, the code automatically sets `loss_mode = "aepo"` in the config

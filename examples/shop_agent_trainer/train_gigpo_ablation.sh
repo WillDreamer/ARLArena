@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -28,9 +28,12 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B-Thinking-2507
+MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+
+#* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
+#* gigpo, empg, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo
+estimator="aepo" 
 project_name="ARLArena_webshop"
 max_response_length=500
 

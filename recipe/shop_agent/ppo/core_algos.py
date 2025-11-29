@@ -115,6 +115,7 @@ def compute_gae_advantage_return(
     return advantages, returns
 
 
+
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
@@ -152,15 +153,26 @@ def compute_grpo_outcome_advantage(
     id2score = defaultdict(list)
     id2mean = {}
     id2std = {}
-    seen_pairs = set()
+    traj2steps = defaultdict(list)  # key: (idx, traj), value: list of step-score tensors
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
-            if (index[i], traj_index[i]) in seen_pairs:
-                continue
-            id2score[index[i]].append(scores[i])
-            if not compute_mean_std_cross_steps:
-                seen_pairs.add((index[i], traj_index[i]))
+            key = (index[i], traj_index[i])
+            traj2steps[key].append(scores[i])
+
+        if compute_mean_std_cross_steps:
+            # Every step is a sample: add all step-scores into id2score[index]
+            for (idx, traj), step_list in traj2steps.items():
+                for s in step_list:
+                    id2score[idx].append(s)
+        else:
+            # Per-trajectory average: for each (idx, traj) compute mean across its steps,
+            # then use that mean as one sample for the group identified by idx.
+            for (idx, traj), step_list in traj2steps.items():
+                # stack step tensors and compute mean for this trajectory
+                stacked = torch.stack(step_list)  # shape (num_steps_in_traj,)
+                traj_mean = torch.mean(stacked)
+                id2score[idx].append(traj_mean)
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
