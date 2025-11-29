@@ -445,7 +445,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                     #* new log prob entropy
                     entropy, log_prob = self._forward_micro_batch(
-                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                        model_inputs, temperature=temperature, calculate_entropy=True
                     )
 
                     #* 收集micro_batch信息到logprobs_dp字典
