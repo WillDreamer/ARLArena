@@ -6,7 +6,7 @@ val_data=[datasets/${dataset_name}/test.parquet]
 
 ulimit -n 1048576
 # ======================== GPU auto selection ========================
-GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -15,7 +15,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-model_name=Qwen/Qwen2.5-Coder-7B
+model_name=Qwen/Qwen2.5-Coder-3B
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
 n_nodes=1
 n=16
@@ -62,6 +62,9 @@ export RAY_TMPDIR="/data2/whx/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 rollout_mode='async'
+
+# PORT=$(( ( RANDOM % 10000 +1000) ))
+# ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7654 --include-dashboard=true
 
 # temp file for action tokens as verl cannot pass special strs as params
 action_stop_tokens_file="$(mktemp)"

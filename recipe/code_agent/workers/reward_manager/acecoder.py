@@ -159,21 +159,53 @@ class AceCoderRewardManager:
         ]
         # save the dumped samples to a file
         temp_file = self.record_dir / f"step-{self.step_idx}_{hash_string(''.join(question_hashes))}.jsonl"
-        with open(temp_file, "w") as f:
-            for sample in samples:
-                f.write(json.dumps(sample) + "\n")
+        # Retry file write up to 5 times if unsuccessful
+        write_success = False
+        for attempt in range(5):
+            try:
+                with open(temp_file, "w") as f:
+                    for sample in samples:
+                        f.write(json.dumps(sample) + "\n")
+                if temp_file.exists() and temp_file.stat().st_size > 0:
+                    write_success = True
+                    break
+            except Exception as e:
+                print(f"Warning: Failed to write {temp_file} on attempt {attempt + 1}: {e}")
+            time.sleep(0.1)
+        if not write_success:
+            raise RuntimeError(f"Failed to write to {temp_file} after multiple attempts.")
+
         # perform batched scoring for coding score: call the acecoder evaluation script to retrieve the coder part scores
         output_file = Path(temp_file).with_suffix(f".eval_results_binary.jsonl").absolute()
         command = f"python -m acecoder.eval_test_cases --samples {temp_file} --n_workers {self.n_workers} \
             --extract_solution True --output_file {output_file} --test_details True \
-            --i_just_wanna_run True --min_time_limit 1 --gt_time_limit_factor 1"
-        start = time.time()
-        subprocess.run(command, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        end = time.time()
-        print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
+            --i_just_wanna_run True --min_time_limit 2 --gt_time_limit_factor 1"
+        # start = time.time()
+        # subprocess.run(command, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        # end = time.time()
+        # print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
         # the script will dump the results into the output_file, read it and parse it as a list
+
+        implement_success = False
+        for attempt in range(5):
+            try:
+                start = time.time()
+                subprocess.run(command, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                end = time.time()
+                print(f"Step {self.step_idx}: acecoder evaluation script took {end - start:.2f} seconds for {len(samples)} samples.")
+                if os.path.exists(output_file):
+                    implement_success = True
+                    break
+            except Exception as e:
+                print(f"Warning: Failed to implement acecoder evaluation script on attempt {attempt + 1}: {e}")
+                time.sleep(0.1)
+        if not implement_success:
+            print(f"Temp file {temp_file} exists: {temp_file.exists()}")
+            raise RuntimeError(f"Failed to implement acecoder evaluation script for {temp_file} after multiple attempts.")
+
         with open(output_file, "r") as f:
             all_samples_results = [json.loads(x) for x in f]
+
         pass_rates = [x['eval_results']['pass_rate'] for x in all_samples_results]
         # print the error statistics
         # syntax error
