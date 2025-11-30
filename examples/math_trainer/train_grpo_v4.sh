@@ -18,19 +18,19 @@ MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=4
+ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8000
-MAX_RESPONSE_LENGTH=8000
+VAL_BEFORE_TRAIN=True
+MAX_PROMPT_LENGTH=16000
+MAX_RESPONSE_LENGTH=16000
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=1
+PPO_MICRO_TOKEN=32000
+TOTAL_EPOCHS=4
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
@@ -64,6 +64,7 @@ LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
 ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+VALIDATION_DATA_DIR=/local/xw27/ARLArena/validation_data_$RUN_NAME
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -222,8 +223,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1336
-DASHBOARD_PORT=1337
+PORT=1338
+DASHBOARD_PORT=1339
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -363,5 +364,6 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     trainer.val_only=$VAL_ONLY \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
     +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
+    +trainer.validation_data_dir=$VALIDATION_DATA_DIR \
     trainer.max_actor_ckpt_to_keep=2 \
     | tee -a $LOG_FILE_PATH

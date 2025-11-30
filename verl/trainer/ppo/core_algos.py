@@ -1339,7 +1339,7 @@ def compute_policy_loss_sapo(
     log_prob: torch.Tensor,
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
-    loss_agg_mode: str = "seq-mean-token-mean",
+    loss_agg_mode: str = "token-mean",
     config: Optional[DictConfig | ActorConfig] = None,
     rollout_log_probs=None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1360,7 +1360,7 @@ def compute_policy_loss_sapo(
         log_prob:       (B, T) log π_new
         advantages:     (B, T) group-normalized advantages (usually constant across tokens of a sequence)
         response_mask:  (B, T) mask for response tokens
-        loss_agg_mode:  aggregation mode; "seq-mean-token-mean" matches Eq. (5) exactly
+        loss_agg_mode:  aggregation mode; "token-mean" default
         config:         ActorConfig with fields:
                           - clip_ratio, clip_ratio_low, clip_ratio_high (for logging only)
                           - sapo_tau_pos (default 1.0)
@@ -1417,7 +1417,6 @@ def compute_policy_loss_sapo(
         tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
         pg_losses = pg_losses * tis_imp_ratio
 
-    # --- Aggregate loss; "seq-mean-token-mean" matches 1/|y_i| Σ_t, then average over sequences ---
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
     # --- Diagnostics: fraction of tokens whose ratio lies outside a PPO-style band ---
@@ -1432,7 +1431,104 @@ def compute_policy_loss_sapo(
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
+@register_policy_loss("cispo")
+def compute_policy_loss_cispo(
+    old_log_prob,
+    log_prob,
+    advantages,
+    response_mask,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[DictConfig | AlgoConfig] = None,
+):
+    """
+    Compute the CISPO (Clipped Importance Sampling Policy Optimization) policy loss.
+    
+    Paper link: https://arxiv.org/abs/2506.13585
+    CISPO objective (Equation 4 in paper):
+        ICISPO(θ) = E[sg(r_hat_i,t(θ)) * A_hat_i,t * log π_θ(o_i,t | q, o_i,<t)]
+    
+    Clipped IS weight (Equation 5 in paper):
+        r_hat_i,t(θ) = clip(r_i,t(θ), 1 - ε_low^IS, 1 + ε_high^IS)
+    
+    Key differences from PPO:
+    1. Clipping is applied to IS weight first, then stop gradient
+    2. Loss form: -sg(clip(r)) * A * log_prob (no min() operation)
+    3. Stop gradient prevents clipped ratio from affecting gradient flow
+    
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. Defaults to "token-mean".
+    
+    Returns:
+        pg_loss (torch.Tensor):
+            Scalar policy gradient loss.
+        pg_clipfrac (torch.Tensor):
+            Fraction of ratios that were clipped.
+        ppo_kl (torch.Tensor):
+            Approximate KL divergence between old and current policy.
+        pg_clipfrac_lower (torch.Tensor):
+            Always 0.0 for CISPO (kept for API compatibility).
+    """
+    assert config is not None
+    assert not isinstance(config, AlgoConfig)
+    clip_ratio = config.clip_ratio  # Clipping parameter ε for standard PPO. See https://arxiv.org/abs/1707.06347.
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
+    clip_ratio_c = config.get(  # Lower bound of the ratio for dual-clip PPO. See https://arxiv.org/pdf/1912.09729.
+        "clip_ratio_c", 3.0
+    )
 
+    cliprange = clip_ratio
+    cliprange_low = clip_ratio_low
+    cliprange_high = clip_ratio_high
+    # 1. Compute importance sampling ratio: r = π_θ / π_θ_old
+    negative_approx_kl = log_prob - old_log_prob
+    ratio = torch.exp(negative_approx_kl)
+    
+    # Compute KL divergence for monitoring
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    
+    # 2. Set clipping bounds (Equation 5: ε_low^IS and ε_high^IS)
+    if cliprange_low is None:
+        cliprange_low = cliprange
+    if cliprange_high is None:
+        cliprange_high = cliprange
+    
+    # 3. Clip the IS weight: r_hat = clip(r, 1 - ε_low^IS, 1 + ε_high^IS)
+    r_hat = torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)
+    
+    # 4. Apply stop gradient: sg(r_hat) - this is the key CISPO feature!
+    # The clipped ratio does not contribute to gradients
+    r_hat_detached = r_hat.detach()
+    
+    # 5. Compute CISPO loss: -sg(r_hat) * A * log_prob
+    # Negative sign because we minimize loss (maximize objective)
+    # Note: Unlike PPO, we don't use min() - we directly use the clipped weight
+    pg_losses = -r_hat_detached * advantages * log_prob
+    
+    # Apply response mask
+    pg_losses = pg_losses * response_mask
+    
+    # 6. Aggregate loss
+    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+    
+    # 7. Compute metrics
+    # Clip fraction: how many ratios were clipped
+    is_clipped = (ratio < (1 - cliprange_low)) | (ratio > (1 + cliprange_high))
+    pg_clipfrac = verl_F.masked_mean(is_clipped.float(), response_mask)
+    
+    # pg_clipfrac_lower is not used in CISPO (no dual-clip), return 0 for compatibility
+    pg_clipfrac_lower = torch.tensor(0.0, device=pg_loss.device)
+    
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
     """Compute categorical entropy loss (For backward compatibility)
