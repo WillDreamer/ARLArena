@@ -32,8 +32,8 @@ MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
-#* gigpo, empg, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo
-estimator="aepo" 
+#* gigpo✅, aepo✅, gspo✅, sapo, dgrpo✅, vanilla_grpo, dapo, empg, cispo
+estimator="empg" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
@@ -99,8 +99,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=2 \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
@@ -118,3 +116,6 @@ do
         trainer.total_epochs=150 \
         trainer.val_before_train=False $@
 done
+
+# algorithm.filter_groups.enable=True \
+# algorithm.filter_groups.max_num_gen_batches=2 \
