@@ -330,11 +330,12 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO):
-        # GRPO, AEPO, GSPO, and SAPO use the same advantage computation
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO):
+        # GRPO, AEPO, GSPO, SAPO, and CISPO use the same advantage computation
         # AEPO's entropy balancing is handled in the loss function (compute_policy_loss_aepo)
         # GSPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_gspo)
         # SAPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_sapo)
+        # CISPO's contrastive importance sampling is handled in the loss function (compute_policy_loss_cispo)
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
             # If multi-turn, replace the mask with the relevant part of loss_mask
@@ -411,6 +412,22 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.DRGRPO:
+        # DRGRPO use the same advantage computation as GRPO but without std normalization
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with norm_adv_by_std_in_grpo=False for Dr.GRPO
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            norm_adv_by_std_in_grpo=False,  # Dr.GRPO does not scale by std
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
     else:
         raise NotImplementedError
     return data
@@ -440,7 +457,9 @@ class AdvantageEstimator(str, Enum):
     AEPO = "aepo"  # Adaptive Entropy Policy Optimization
     GSPO = "gspo"  # Group Sequence Policy Optimization
     SAPO = "sapo"  # Sequence-level Adaptive Policy Optimization
+    CISPO = "cispo"  # Contrastive Importance Sampling Policy Optimization
     EMPG = 'empg'
+    DRGRPO = "drgrpo"  # Dr.GRPO: Group Relative Policy Optimization without token averaging
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -522,7 +541,9 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             AdvantageEstimator.AEPO,
             AdvantageEstimator.GSPO,
             AdvantageEstimator.SAPO,
+            AdvantageEstimator.CISPO,
             AdvantageEstimator.EMPG,
+            AdvantageEstimator.DRGRPO,
         ]:
             self.use_critic = False
         else:
@@ -544,6 +565,21 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         if adv_estimator == AdvantageEstimator.SAPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "sapo"
+        
+        # Automatically set loss_mode to "cispo" when using CISPO advantage estimator
+        if adv_estimator == AdvantageEstimator.CISPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "cispo"
+        
+        # Automatically set loss_agg_mode to "seq-mean-token-sum" for DRGRPO to avoid token averaging
+        if adv_estimator == AdvantageEstimator.DRGRPO:
+            with open_dict(self.config):
+                # Set loss aggregation mode to sum tokens instead of averaging them
+                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
+                # Also set for entropy loss if it exists
+                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
 
         self._validate_config()
         self._create_dataloader()
@@ -1106,6 +1142,20 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             data_source=sample_data_source,
         )
 
+        # Dump validation outputs to file if configured
+        validation_data_dir = self.config.trainer.get("validation_data_dir", None)
+        if validation_data_dir:
+            # Prepare reward_extra_info_dict for dumping
+            # reward_extra_info_dict structure: {key: [list of values per sample]}
+            # Already in the correct format for _dump_generations
+            self._dump_generations(
+                inputs=sample_inputs,
+                outputs=sample_outputs,
+                scores=sample_scores,
+                reward_extra_infos_dict=reward_extra_info_dict,
+                dump_path=validation_data_dir,
+            )
+
         reward_tensor = (
             torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()
         )  # (batch_size,)
@@ -1212,7 +1262,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            if analysis_data is not None:
+            if analysis_data != {}:
                 for j in range(log_probs.shape[0]):
                     entry = {k: v[j] for k, v in analysis_data.items()}
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
