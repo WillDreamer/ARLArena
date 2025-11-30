@@ -27,9 +27,45 @@ import verl.utils.torch_functional as verl_F
 from collections import defaultdict, Counter
 from verl import DataProto
 import uuid
-
+from omegaconf import DictConfig
 from difflib import SequenceMatcher
+from typing import Any, Callable, Optional
 from typing import Sequence, List, Dict, Any
+from verl.trainer.config import AlgoConfig
+from verl.utils.import_utils import deprecated
+from verl.workers.config import ActorConfig
+
+PolicyLossFn = Callable[
+    [
+        torch.Tensor,  # old_log_prob
+        torch.Tensor,  # log_prob
+        torch.Tensor,  # advantages
+        torch.Tensor,  # response_mask
+        str,  # loss_agg_mode
+        Optional[DictConfig | AlgoConfig],  # config
+    ],
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+]
+
+POLICY_LOSS_REGISTRY: dict[str, PolicyLossFn] = {}
+
+
+def register_policy_loss(name: str) -> Callable[[PolicyLossFn], PolicyLossFn]:
+    """Register a policy loss function with the given name.
+
+    Args:
+        name (str): The name to register the policy loss function under.
+
+    Returns:
+        function: Decorator function that registers the policy loss function.
+    """
+
+    def decorator(func: PolicyLossFn) -> PolicyLossFn:
+        POLICY_LOSS_REGISTRY[name] = func
+        return func
+
+    return decorator
+
 
 
 class AdaptiveKLController:
@@ -404,6 +440,67 @@ def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_ba
 
     return advantages, returns
 
+def process_token_sequences(
+    token_id_tensor: torch.Tensor,
+    start_end_delimiter_seq: list[int] = [151644, 77091, 198],
+    target_delimiter_seq: list[int] = [151645],
+    head_sequence: list[int] = [151645, 151644, 87280]
+) -> dict:
+    """
+    Processes a token ID tensor to find tokens between specific delimiters and
+    the end index of a leading sequence.
+    Args:
+        token_id_tensor (torch.Tensor): A 1D PyTorch tensor of token IDs.
+        start_end_delimiter_seq (list[int]): The sequence marking the start and end
+                                              of the segments to extract.
+                                              For your case, this is [151644, 77091, 1699]
+                                              for start, and [151645] for end.
+                                              This function assumes the 'start' sequence
+                                              is [151644, 77091, 1699] and the 'end' sequence
+                                              is [151645] as per your previous requests.
+        target_delimiter_seq (list[int]): The sequence to mark the end of segments
+                                            when found after start_end_delimiter_seq.
+                                            For your case, this is [151645].
+        head_sequence (list[int]): The sequence to find from the beginning of the tensor,
+                                   and return its exclusive end index.
+                                   For your case, this is [151645, 151644, 872].
+    Returns:
+        dict: A dictionary containing:
+              - 'between_delimiters': A list of tuples, where each tuple contains:
+                                      (start_index_of_tokens, end_index_of_tokens, tokens_tensor).
+                                      These are the tokens found between `start_end_delimiter_seq`
+                                      and `target_delimiter_seq`.
+              - 'first_head_sequence_end_index': The exclusive end index of the first
+                                                 `head_sequence` found from the beginning of the tensor.
+                                                 Returns -1 if not found.
+    """
+    if not isinstance(token_id_tensor, torch.Tensor) or token_id_tensor.ndim != 1:
+        raise ValueError("token_id_tensor must be a 1D PyTorch tensor.")
+    if not start_end_delimiter_seq or not target_delimiter_seq or not head_sequence:
+        raise ValueError("All sequence arguments cannot be empty.")
+    results = []
+    start_seq_len = len(start_end_delimiter_seq)
+    target_seq_len = len(target_delimiter_seq)
+    head_seq_len = len(head_sequence)
+    start_seq_tensor = torch.tensor(start_end_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    target_seq_tensor = torch.tensor(target_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    head_seq_tensor = torch.tensor(head_sequence, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    # --- Part 1: Find the end index of the first head_sequence from the beginning ---
+    for k in range(len(token_id_tensor) - head_seq_len + 1):
+        if torch.equal(token_id_tensor[k : k + head_seq_len], head_seq_tensor):
+            results.append((0, k + head_seq_len))
+            break # Found the first one, no need to search further
+    # --- Part 2: Find tokens between start_end_delimiter_seq and target_delimiter_seq ---
+    for i in range(len(token_id_tensor) - start_seq_len + 1):
+        if torch.equal(token_id_tensor[i : i + start_seq_len], start_seq_tensor):
+            for j in range(i + start_seq_len, len(token_id_tensor) - target_seq_len + 1):
+                if torch.equal(token_id_tensor[j : j + target_seq_len], target_seq_tensor):
+                    tokens_start_idx = i + start_seq_len
+                    tokens_end_idx = j
+                    results.append((tokens_start_idx, tokens_end_idx + 1))
+                    break # Found a pair, move to find the next start_end_delimiter_seq
+    return results
+
 def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
     """
     Args:
@@ -413,6 +510,26 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
         k_f (float): Hyperparameter for the future clarity bonus.
         zeta (float): Hyperparameter for the future clarity bonus.
     """
+
+    # --- 1. First Pass: Collect Step-Level Entropies ---
+    all_step_entropies = []
+    # segments_to_modify stores {'sample_idx', 'start', 'end'} for each step
+    segments_to_modify = [] 
+
+    for i in range(batch.batch.batch_size[0]):
+        # Find "assistant" segments, which correspond to agent steps.
+        token_segments = process_token_sequences(
+            batch.batch['responses'][i], 
+            [151644, 77091, 198], 
+            [151645]
+        )
+        for start, end in token_segments:
+            if start >= end: continue
+            
+            # Calculate the average token-level entropy for the step
+            step_entropy = batch.batch['old_entropy'][i][start:end].mean().item()
+            all_step_entropies.append(step_entropy)
+            segments_to_modify.append({'sample_idx': i, 'start': start, 'end': end})
 
     # --- 1. Calculate Modulated Advantage Components ---
     H = np.array(batch.batch['old_entropy'])
@@ -559,6 +676,314 @@ def compute_policy_loss(
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
+@register_policy_loss("aepo")
+def compute_policy_loss_aepo(
+    old_log_prob,
+    log_prob,
+    advantages,
+    response_mask,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[DictConfig | AlgoConfig] = None,
+    entropy: Optional[torch.Tensor] = None,
+    **kwargs,
+):
+    """
+    Compute policy loss with entropy-balanced clipping and advantage modification.
+    Adapted from paper https://arxiv.org/abs/2510.14545
+    https://github.com/RUC-NLPIR/ARPO
+    
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            not used
+        config: Optional configuration object
+        entropy (torch.Tensor, optional):
+            Token-level entropy, shape (batch_size, response_length). Required for AEPO.
+            If None, will raise an error.
+        **kwargs: Additional keyword arguments (for compatibility with other policy loss functions)
+        
+    Returns:
+        pg_loss: scalar torch.Tensor - policy gradient loss
+        pg_clipfrac: float - fraction of loss being clipped
+        ppo_kl: float - estimated KL divergence
+        pg_clipfrac_lower: float - fraction clipped when advantage is negative
+    """
+    if entropy is None:
+        raise ValueError(
+            "AEPO policy loss requires entropy. Please pass entropy when calling this function. "
+            "For example: policy_loss_fn(..., entropy=entropy)"
+        )
+
+    clip_ratio = config.clip_ratio  # Clipping parameter. See https://arxiv.org/abs/1707.06347.
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
+    clip_ratio_c = config.get(  # Lower bound of the ratio for dual-clip PPO. See https://arxiv.org/pdf/1912.09729.
+        "clip_ratio_c", 3.0
+    )
+
+    cliprange = clip_ratio
+    cliprange_low = clip_ratio_low
+    cliprange_high = clip_ratio_high
+    if cliprange_low is None:
+        cliprange_low = cliprange
+    if cliprange_high is None:
+        cliprange_high = cliprange
+
+    valid_entropy = entropy * response_mask.float()
+    valid_entropy_flat = valid_entropy[response_mask.bool()]
+    
+    # Initialize entropy_normalized to zeros in case there are no valid tokens
+    entropy_normalized = torch.zeros_like(entropy)
+        
+    if len(valid_entropy_flat) > 0:
+        entropy_mean = valid_entropy_flat.mean()
+        entropy_std = valid_entropy_flat.std()
+            
+        # Avoid division by zero
+        if entropy_std == 0:
+            entropy_std = torch.tensor(1.0, device=entropy.device)
+            
+        entropy_normalized = (entropy - entropy_mean) / entropy_std
+            
+        advantages = advantages * (1 + 0.2 * entropy_normalized.detach())
+    
+    assert clip_ratio_c > 1.0, (
+        "The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0,"
+        + f" but get the value: {clip_ratio_c}."
+    )
+    
+    negative_approx_kl = log_prob - old_log_prob
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    pg_losses1 = -advantages * ratio
+    
+    
+    min_bound = torch.full_like(ratio, 1 - cliprange_low)
+    ratio_for_bound = torch.where(entropy_normalized > 0, ratio, ratio.detach())
+    max_bound = (1 + cliprange_high) / ratio_for_bound * ratio
+    pg_losses2 = -advantages * torch.clamp(ratio, min_bound, max_bound)
+    
+    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+    pg_clipfrac = verl_F.masked_mean(
+        torch.gt(pg_losses2, pg_losses1).float(), response_mask
+    )
+    
+    pg_losses3 = -advantages * clip_ratio_c
+    clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
+    pg_clipfrac_lower = verl_F.masked_mean(
+        torch.gt(clip_pg_losses1, pg_losses3) * (advantages < 0).float(), response_mask
+    )
+    
+    pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
+    pg_loss = agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
+    )
+    
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
+
+@register_policy_loss("sapo")
+def compute_policy_loss_sapo(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[DictConfig | ActorConfig] = None,
+    rollout_log_probs=None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Soft Adaptive Policy Optimization (SAPO) loss.
+
+    Implements Eq. (5)–(6)/(10)–(12) from "Soft Adaptive Policy Optimization" (arXiv:2511.20347):
+        J(θ) = E[ (1/G) Σ_i (1/|y_i|) Σ_t f_i,t(r_i,t(θ)) * A_i,t^b ]
+
+    with token-level gate:
+        f_i,t(r) = (4 / τ_i) * σ(τ_i (r - 1)),
+
+    and sequence-level temperature:
+        τ_i = τ_pos if A_i^b > 0 else τ_neg.
+
+    Args:
+        old_log_prob:   (B, T) log π_old
+        log_prob:       (B, T) log π_new
+        advantages:     (B, T) group-normalized advantages (usually constant across tokens of a sequence)
+        response_mask:  (B, T) mask for response tokens
+        loss_agg_mode:  aggregation mode; "token-mean" default
+        config:         ActorConfig with fields:
+                          - clip_ratio, clip_ratio_low, clip_ratio_high (for logging only)
+                          - sapo_tau_pos (default 1.0)
+                          - sapo_tau_neg (default 2.0, should be > sapo_tau_pos)
+                          - sapo_epsilon (default 1e-8)
+        rollout_log_probs: optional behavior-policy log-probs (for TIS, not part of the original SAPO paper)
+    """
+
+    assert config is not None
+    assert isinstance(config, ActorConfig)
+    # --- PPO-style band, used ONLY for diagnostics (SAPO itself has no hard clipping) ---
+    clip_ratio = config.clip_ratio
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
+
+    # --- SAPO hyperparameters: τ_neg > τ_pos for faster decay on negative sequences (Sec. 3) ---
+    tau_pos = getattr(config, "sapo_tau_pos", 1.0)
+    tau_neg = getattr(config, "sapo_tau_neg", 1.04)
+    eps = getattr(config, "sapo_epsilon", 1e-8)
+
+    # --- Token-level importance ratios r_i,t(θ) (Eq. (2)) ---
+    negative_approx_kl = log_prob - old_log_prob          # log r_i,t
+    negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
+    ratio = torch.exp(negative_approx_kl)                  # r_i,t
+
+    # Approx KL for logging (same as GRPO/GSPO-style metrics)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+
+    # --- Sequence-level advantages A_i^b (mean over tokens; equals A_i when broadcast) ---
+    mask_f = response_mask.float()
+    seq_lengths = mask_f.sum(dim=-1).clamp(min=1.0)        # |y_i|, shape (B,)
+
+    adv_seq = (advantages * mask_f).sum(dim=-1) / seq_lengths   # (B,)
+
+    # τ_i = τ_pos if A_i > 0 else τ_neg  (Eq. (12))
+    tau_pos_tensor = torch.full_like(adv_seq, tau_pos)
+    tau_neg_tensor = torch.full_like(adv_seq, tau_neg)
+    tau_seq = torch.where(adv_seq > 0, tau_pos_tensor, tau_neg_tensor)   # (B,)
+
+    # Broadcast τ_i over tokens
+    tau = tau_seq.unsqueeze(-1)                                         # (B, 1) -> (B, T)
+
+    # --- SAPO gate: f_i,t(r) = (4 / τ_i) * σ(τ_i (r - 1))  (Eq. (6)/(12)) ---
+    delta = ratio - 1.0
+    p = torch.sigmoid(tau * delta)                                      # σ(τ_i (r_i,t - 1))
+    gate = 4.0 * p / (tau + eps)                                        # f_i,t(r_i,t)
+
+    # --- Surrogate per-token loss: -f_i,t(r_i,t) * A_i,t^b  (Eq. (5)/(10)) ---
+    pg_losses = -gate * advantages                                      # (B, T)
+
+    # --- (Optional) Truncated importance sampling (not in original SAPO, but harmless if disabled) ---
+    if getattr(config, "tis_imp_ratio_cap", 0.0) > 0 and rollout_log_probs is not None:
+        tis_imp_ratio = torch.exp(old_log_prob - rollout_log_probs)
+        tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
+        pg_losses = pg_losses * tis_imp_ratio
+
+    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+    # --- Diagnostics: fraction of tokens whose ratio lies outside a PPO-style band ---
+    upper_band = 1.0 + clip_ratio_high
+    lower_band = 1.0 - clip_ratio_low
+
+    high = (ratio > upper_band).float()
+    low = (ratio < lower_band).float()
+
+    pg_clipfrac = verl_F.masked_mean(high, response_mask)       # “too high” ratio fraction
+    pg_clipfrac_lower = verl_F.masked_mean(low, response_mask)  # “too low” ratio fraction
+
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
+
+@register_policy_loss("cispo")
+def compute_policy_loss_cispo(
+    old_log_prob,
+    log_prob,
+    advantages,
+    response_mask,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[DictConfig | AlgoConfig] = None,
+):
+    """
+    Compute the CISPO (Clipped Importance Sampling Policy Optimization) policy loss.
+    
+    Paper link: https://arxiv.org/abs/2506.13585
+    CISPO objective (Equation 4 in paper):
+        ICISPO(θ) = E[sg(r_hat_i,t(θ)) * A_hat_i,t * log π_θ(o_i,t | q, o_i,<t)]
+    
+    Clipped IS weight (Equation 5 in paper):
+        r_hat_i,t(θ) = clip(r_i,t(θ), 1 - ε_low^IS, 1 + ε_high^IS)
+    
+    Key differences from PPO:
+    1. Clipping is applied to IS weight first, then stop gradient
+    2. Loss form: -sg(clip(r)) * A * log_prob (no min() operation)
+    3. Stop gradient prevents clipped ratio from affecting gradient flow
+    
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. Defaults to "token-mean".
+    
+    Returns:
+        pg_loss (torch.Tensor):
+            Scalar policy gradient loss.
+        pg_clipfrac (torch.Tensor):
+            Fraction of ratios that were clipped.
+        ppo_kl (torch.Tensor):
+            Approximate KL divergence between old and current policy.
+        pg_clipfrac_lower (torch.Tensor):
+            Always 0.0 for CISPO (kept for API compatibility).
+    """
+    assert config is not None
+    assert not isinstance(config, AlgoConfig)
+    clip_ratio = config.clip_ratio  # Clipping parameter ε for standard PPO. See https://arxiv.org/abs/1707.06347.
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
+    clip_ratio_c = config.get(  # Lower bound of the ratio for dual-clip PPO. See https://arxiv.org/pdf/1912.09729.
+        "clip_ratio_c", 3.0
+    )
+
+    cliprange = clip_ratio
+    cliprange_low = clip_ratio_low
+    cliprange_high = clip_ratio_high
+    # 1. Compute importance sampling ratio: r = π_θ / π_θ_old
+    negative_approx_kl = log_prob - old_log_prob
+    ratio = torch.exp(negative_approx_kl)
+    
+    # Compute KL divergence for monitoring
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    
+    # 2. Set clipping bounds (Equation 5: ε_low^IS and ε_high^IS)
+    if cliprange_low is None:
+        cliprange_low = cliprange
+    if cliprange_high is None:
+        cliprange_high = cliprange
+    
+    # 3. Clip the IS weight: r_hat = clip(r, 1 - ε_low^IS, 1 + ε_high^IS)
+    r_hat = torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)
+    
+    # 4. Apply stop gradient: sg(r_hat) - this is the key CISPO feature!
+    # The clipped ratio does not contribute to gradients
+    r_hat_detached = r_hat.detach()
+    
+    # 5. Compute CISPO loss: -sg(r_hat) * A * log_prob
+    # Negative sign because we minimize loss (maximize objective)
+    # Note: Unlike PPO, we don't use min() - we directly use the clipped weight
+    pg_losses = -r_hat_detached * advantages * log_prob
+    
+    # Apply response mask
+    pg_losses = pg_losses * response_mask
+    
+    # 6. Aggregate loss
+    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+    
+    # 7. Compute metrics
+    # Clip fraction: how many ratios were clipped
+    is_clipped = (ratio < (1 - cliprange_low)) | (ratio > (1 + cliprange_high))
+    pg_clipfrac = verl_F.masked_mean(is_clipped.float(), response_mask)
+    
+    # pg_clipfrac_lower is not used in CISPO (no dual-clip), return 0 for compatibility
+    pg_clipfrac_lower = torch.tensor(0.0, device=pg_loss.device)
+    
+    return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
     """Compute categorical entropy loss (For backward compatibility)
