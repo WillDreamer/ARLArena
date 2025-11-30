@@ -32,8 +32,8 @@ MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
-#* gigpo, empg, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo
-estimator="aepo" 
+#* gigpo✅, aepo✅, gspo✅, sapo, dgrpo✅, vanilla_grpo, dapo, empg, 
+estimator="dgrpo" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
