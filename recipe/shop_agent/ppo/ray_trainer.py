@@ -133,7 +133,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO):
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO):
         # TODO: test on more adv estimator type
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
@@ -280,6 +280,22 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.DRGRPO:
+        # DRGRPO use the same advantage computation as GRPO but without std normalization
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with norm_adv_by_std_in_grpo=False for Dr.GRPO
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            norm_adv_by_std_in_grpo=False,  # Dr.GRPO does not scale by std
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
     else:
         raise NotImplementedError
     return data
@@ -314,6 +330,8 @@ class AdvantageEstimator(str, Enum):
     DGRPO = 'dgrpo'  # Dr Group Reward Policy Optimization
     VGRPO = 'vanilla_grpo'  # Vanilla Group Reward Policy Optimization
     DAPO = 'dapo'  # Dynamic Sampling Policy Optimization
+    CISPO = 'cispo'  # Contrastive Importance Sampling Policy Optimization
+
 
 class ShopAgentTrainer(RayPPOTrainer):
     """
@@ -350,16 +368,31 @@ class ShopAgentTrainer(RayPPOTrainer):
         self.envs = envs
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
-        if self.config.algorithm.adv_estimator == 'aepo':
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.AEPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
-        elif self.config.algorithm.adv_estimator == 'gspo':
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.GSPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
         # Automatically set loss_mode to "sapo" when using SAPO advantage estimator
-        if self.config.algorithm.adv_estimator == 'sapo':
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.SAPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "sapo"
+        
+        # Automatically set loss_mode to "cispo" when using CISPO advantage estimator
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.CISPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "cispo"
+        
+        # Automatically set loss_agg_mode to "seq-mean-token-sum" for DRGRPO to avoid token averaging
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.DGRPO:
+            with open_dict(self.config):
+                # Set loss aggregation mode to sum tokens instead of averaging them
+                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
+                # Also set for entropy loss if it exists
+                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
 
     def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
@@ -923,6 +956,8 @@ class ShopAgentTrainer(RayPPOTrainer):
                         entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
+                        old_entropy = old_log_prob.batch["entropys"]
+                        batch = batch.union(DataProto.from_single_dict({"old_entropy": old_entropy}))
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
