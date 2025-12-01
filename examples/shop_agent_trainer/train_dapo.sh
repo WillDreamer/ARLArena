@@ -116,6 +116,3 @@ do
         trainer.total_epochs=150 \
         trainer.val_before_train=False $@
 done
-
-# algorithm.filter_groups.enable=True \
-# algorithm.filter_groups.max_num_gen_batches=2 \
