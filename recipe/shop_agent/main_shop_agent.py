@@ -211,9 +211,9 @@ class TaskRunner:
 
         from agent_system.multi_turn_rollout import TrajectoryCollector
         if config.algorithm.adv_estimator == 'dapo':
-            with open_dict(self.config):
-                self.config.algorithm.filter_groups.enable=True
-                self.config.algorithm.filter_groups.max_num_gen_batches=2
+            with open_dict(config):
+                config.algorithm.filter_groups.enable=True
+                config.algorithm.filter_groups.max_num_gen_batches=2
             traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
         else:
             traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
