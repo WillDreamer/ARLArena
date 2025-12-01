@@ -195,15 +195,13 @@ class TaskRunner:
             val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, normalize_by_length=False)
 
         elif reward_manager_name == 'dapo':
-            from verl.workers.reward_manager.dapo import DAPORewardManager
+            from agent_system.reward_manager.dapo import DAPORewardManager
             reward_manager_cls = DAPORewardManager
-            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0)
+            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, overlong_buffer_cfg_len=300, overlong_max_resp_len=config.data.max_response_length)
             # Note that we always use function-based RM for validation
-            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1)
+            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, overlong_buffer_cfg_len=300, overlong_max_resp_len=config.data.max_response_length)
         else:
             raise NotImplementedError
-
-        
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 
