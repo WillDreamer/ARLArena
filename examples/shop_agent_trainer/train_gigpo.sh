@@ -32,8 +32,8 @@ MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
-#* gigpo✅, aepo✅, gspo✅, sapo, dgrpo✅, vanilla_grpo, dapo, empg, cispo
-estimator="empg" 
+#* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
+estimator="gigpo" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
@@ -55,7 +55,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic_len_${max_response_length}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \

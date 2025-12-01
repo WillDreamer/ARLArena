@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
 from typing import Dict, Optional, Type
-
 import numpy as np
 import ray
 import torch
@@ -41,6 +40,12 @@ from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from verl.single_controller.base import Worker
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
 from verl.single_controller.ray.base import create_colocated_worker_cls
+from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
+from verl.utils.metric import reduce_metrics
+from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
+from verl.utils.torch_functional import masked_mean
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer, ResourcePoolManager, Role, apply_kl_penalty, compute_response_mask
+from verl.utils.debug import marked_timer
 
 from recipe.shop_agent.ppo.metric_utils import (
     compute_data_metrics,
@@ -50,17 +55,7 @@ from recipe.shop_agent.ppo.metric_utils import (
     flatten_nested_metrics,
 )
 from recipe.shop_agent.ppo.reward import compute_reward, compute_reward_async
-from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
-from verl.utils.metric import (
-    reduce_metrics,
-)
-from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
-from verl.utils.torch_functional import masked_mean
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer, ResourcePoolManager, Role, apply_kl_penalty, compute_response_mask
-from verl.utils.debug import marked_timer
-from recipe.shop_agent.ppo.core_algos import compute_gigpo_outcome_advantage, compute_step_discounted_returns
 from recipe.shop_agent.ppo import core_algos
-from recipe.shop_agent.ppo.core_algos import agg_loss
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
 from recipe.shop_agent.utils import GenerationsLogger
 
@@ -92,6 +87,16 @@ def apply_invalid_action_penalty(data: DataProto, invalid_action_penalty_coef=fl
     valid_action_ratio = np.mean(data.non_tensor_batch['is_action_valid'].astype(np.float32)).item()
     metrics = {'episode/valid_action_ratio': valid_action_ratio}
     return data, metrics
+
+#* Newly added metrics
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
 
 
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
@@ -245,7 +250,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
     elif adv_estimator == AdvantageEstimator.GiGPO:
-        advantages, returns = compute_gigpo_outcome_advantage(
+        advantages, returns = core_algos.compute_gigpo_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
             step_rewards=data.batch['step_rewards'], # for step group reward computing
             response_mask=data.batch['response_mask'],
@@ -300,15 +305,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         raise NotImplementedError
     return data
 
-#* Newly added metrics
-def to_jsonable(obj):
-    if isinstance(obj, torch.Tensor):
-        return obj.tolist()
-    if isinstance(obj, dict):
-        return {k: to_jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [to_jsonable(v) for v in obj]
-    return obj
 
 class AdvantageEstimator(str, Enum):
     """
@@ -327,10 +323,10 @@ class AdvantageEstimator(str, Enum):
     AEPO = "aepo"  # Adaptive Entropy Policy Optimization
     GSPO = "gspo"  # Group Sequence Policy Optimization
     SAPO = "sapo"  # Sequence-level Adaptive Policy Optimization
-    DGRPO = 'dgrpo'  # Dr Group Reward Policy Optimization
     VGRPO = 'vanilla_grpo'  # Vanilla Group Reward Policy Optimization
     DAPO = 'dapo'  # Dynamic Sampling Policy Optimization
     CISPO = 'cispo'  # Contrastive Importance Sampling Policy Optimization
+    DRGRPO = "drgrpo"  # Dr.GRPO: Group Relative Policy Optimization without token averaging
 
 
 class ShopAgentTrainer(RayPPOTrainer):
@@ -368,6 +364,7 @@ class ShopAgentTrainer(RayPPOTrainer):
         self.envs = envs
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
+        
         if self.config.algorithm.adv_estimator == AdvantageEstimator.AEPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
@@ -378,14 +375,12 @@ class ShopAgentTrainer(RayPPOTrainer):
         if self.config.algorithm.adv_estimator == AdvantageEstimator.SAPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "sapo"
-        
         # Automatically set loss_mode to "cispo" when using CISPO advantage estimator
         if self.config.algorithm.adv_estimator == AdvantageEstimator.CISPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "cispo"
-        
         # Automatically set loss_agg_mode to "seq-mean-token-sum" for DRGRPO to avoid token averaging
-        if self.config.algorithm.adv_estimator == AdvantageEstimator.DGRPO:
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.DRGRPO:
             with open_dict(self.config):
                 # Set loss aggregation mode to sum tokens instead of averaging them
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
@@ -393,6 +388,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                 # Also set for entropy loss if it exists
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
                     self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
+
 
     def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
@@ -917,7 +913,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                     batch = gen_batch_output
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
-                        step_rewards_tensor = compute_step_discounted_returns(
+                        step_rewards_tensor = core_algos.compute_step_discounted_returns(
                             batch=batch,
                             gamma=self.config.algorithm.gamma
                         )
@@ -953,7 +949,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
-                        entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+                        entropy_loss = core_algos.agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
                         old_entropy = old_log_prob.batch["entropys"]
@@ -1056,6 +1052,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with marked_timer("update_actor", timing_raw):
+                            print(f"self.config.actor_rollout_ref.actor.policy_loss.loss_mode: {self.config.actor_rollout_ref.actor.policy_loss.loss_mode}",'*'*100)
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
