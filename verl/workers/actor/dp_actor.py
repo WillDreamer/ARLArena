@@ -174,14 +174,18 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
-                output = self.actor_module(
-                    input_ids=input_ids_rmpad,
-                    attention_mask=None,
-                    position_ids=position_ids_rmpad,
-                    **multi_modal_inputs,
-                    use_cache=False,
-                    **extra_args,
-                )  # prevent model thinks we are generating
+                try:
+                    output = self.actor_module(
+                        input_ids=input_ids_rmpad,
+                        attention_mask=None,
+                        position_ids=position_ids_rmpad,
+                        **multi_modal_inputs,
+                        use_cache=False,
+                        **extra_args,
+                    )  # prevent model thinks we are generating
+                except Exception as e:
+                    print("Error occurred:", e)
+                    breakpoint()
 
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)

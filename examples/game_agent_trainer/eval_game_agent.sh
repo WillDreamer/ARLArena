@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
 export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
@@ -19,30 +19,20 @@ NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
 train_data_size=32
-val_data_size=128
-group_size=8  # TODO: increase to 16?
+val_data_size=256
+group_size=8
 
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-# ========== 模型配置 ==========
-# 使用合并后的模型作为初始模型
-# 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
-MERGED_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-merged"  # 你的合并后模型路径，或 HuggingFace ID
-MODEL=${MERGED_MODEL}  # 使用合并后的模型
-
-# 原始 base model（如果需要的话）
-# MODEL=Qwen/Qwen3-VL-4B-Instruct
-
-Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
+MODEL=Qwen/Qwen2.5-VL-3B-Instruct
 MODEL_SHORT="${MODEL##*/}"
-project_name="verl_agent_sokoban_sft_gigpo"
+project_name="verl_agent_sokoban_basline"
 estimator="grpo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
-WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
 WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
@@ -74,10 +64,7 @@ VAL_DATA="$HOME/data/visual/test.parquet"
 
 mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
 
-mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
-
-python3 -m recipe.game_agent.main_game_agent_ablation \
-    algorithm.adv_estimator=$estimator \
+python3 -m recipe.game_agent.eval_game_agent \
     algorithm.adv_estimator=$estimator \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \
@@ -131,13 +118,8 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.n_gpus_per_node=$NUM_GPUS \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
-    trainer.save_freq=10 \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
-    trainer.val_before_train=False "$@" \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
-    critic.model.path=$Critic_MODEL \
-    algorithm.filter_groups.enable=True
     trainer.val_before_train=False "$@" \
     trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
     critic.model.path=$Critic_MODEL \
