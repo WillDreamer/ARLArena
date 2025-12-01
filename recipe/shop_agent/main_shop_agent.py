@@ -190,16 +190,20 @@ class TaskRunner:
         if reward_manager_name == 'episode':
             from agent_system.reward_manager.episode import EpisodeRewardManager
             reward_manager_cls = EpisodeRewardManager
+            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, normalize_by_length=False)
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, normalize_by_length=False)
+
         elif reward_manager_name == 'dapo':
             from verl.workers.reward_manager.dapo import DAPORewardManager
             reward_manager_cls = DAPORewardManager
+            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0)
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1)
         else:
             raise NotImplementedError
 
-        reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, normalize_by_length=False)
-
-        # Note that we always use function-based RM for validation
-        val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, normalize_by_length=False)
+        
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 
