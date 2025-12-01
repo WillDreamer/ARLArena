@@ -421,7 +421,7 @@ class ShopAgentTrainer(RayPPOTrainer):
 
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
-                base_data[k] = v
+                base_data[k] = to_jsonable(v)
 
         with open(filename, "w") as f:
             for i in range(n):
