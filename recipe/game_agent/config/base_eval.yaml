@@ -36,7 +36,7 @@ data:
 actor_rollout_ref:
   hybrid_engine: True
   model:
-    path: ~/models/deepseek-llm-7b-chat
+    path: Qwen/Qwen2.5-VL-3B-Instruct
     use_shm: False
     external_lib: null
     override_config: { }
