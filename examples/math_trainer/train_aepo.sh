@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -18,19 +18,19 @@ MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=4
+ROLLOUT_N=4 #8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
+VAL_BEFORE_TRAIN=True
 MAX_PROMPT_LENGTH=8000
 MAX_RESPONSE_LENGTH=8000
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
-TRAIN_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/train" "/home/xw27/agent/ARLArena/dataset/deepscaler/train")
+TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime" "/home/xw27/agent/ARLArena/dataset/deepscaler/aime25" "/home/xw27/agent/ARLArena/dataset/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/dataset/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
@@ -222,8 +222,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=4334
-DASHBOARD_PORT=4333
+PORT=4335
+DASHBOARD_PORT=4336
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT --num-gpus $NUM_GPUS
 RUN_NAME+="_$MODEL_NAME"

@@ -721,8 +721,18 @@ def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str
         seq_losses = torch.sum(loss_mat * loss_mask, dim=-1)  # token-sum
         loss = torch.mean(seq_losses)  # seq-mean
     elif loss_agg_mode == "seq-mean-token-mean":
-        seq_losses = torch.sum(loss_mat * loss_mask, dim=-1) / torch.sum(loss_mask, dim=-1)  # token-mean
-        loss = torch.mean(seq_losses)  # seq-mean
+        # Filter out sequences where all tokens are masked out
+        valid_seq_mask = torch.sum(loss_mask, dim=-1) > 0
+        if valid_seq_mask.any():
+            # Only compute token-mean for sequences with valid tokens
+            loss_mat_valid = loss_mat[valid_seq_mask]
+            loss_mask_valid = loss_mask[valid_seq_mask]
+            seq_losses = torch.sum(loss_mat_valid * loss_mask_valid, dim=-1) / torch.sum(loss_mask_valid, dim=-1)  # token-mean
+            loss = torch.mean(seq_losses)  # seq-mean
+        else:
+            # If all sequences are masked out, return zero loss
+            loss = torch.tensor(0.0, device=loss_mat.device, dtype=loss_mat.dtype)
+        print(f"seq-mean-token-mean loss: {loss}")
     elif loss_agg_mode == "seq-mean-token-sum-norm":
         seq_losses = torch.sum(loss_mat * loss_mask, dim=-1)
         loss = torch.sum(seq_losses) / loss_mask.shape[-1]  # The divisor
@@ -930,6 +940,7 @@ def compute_policy_loss_gspo(
 
     assert config is not None
     assert isinstance(config, ActorConfig)
+
     clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else config.clip_ratio
     clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else config.clip_ratio
 

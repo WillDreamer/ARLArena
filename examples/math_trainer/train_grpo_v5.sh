@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -30,7 +30,7 @@ PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=2
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
@@ -55,11 +55,11 @@ OUTPUT_ACC_TO_FILE=False
 CONFIG_NAME=simpletir_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
+RESUME=True
 PROJECT_NAME=simpletir_math
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_data_dir
+RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_vanilla
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -222,8 +222,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1336
-DASHBOARD_PORT=1337
+PORT=9339
+DASHBOARD_PORT=9338
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
