@@ -1053,6 +1053,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                         # update actor
                         with marked_timer("update_actor", timing_raw):
                             print(f"self.config.actor_rollout_ref.actor.policy_loss.loss_mode: {self.config.actor_rollout_ref.actor.policy_loss.loss_mode}",'*'*100)
+                            print(f"self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode: {self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode}",'*'*100)
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
