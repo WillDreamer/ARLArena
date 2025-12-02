@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -28,9 +28,12 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B-Thinking-2507
+MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+
+#* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
+#* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
+estimator="gigpo" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
@@ -52,7 +55,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_dynamic_len_${max_response_length}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -96,8 +99,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=2 \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
@@ -115,3 +116,6 @@ do
         trainer.total_epochs=150 \
         trainer.val_before_train=False $@
 done
+
+# algorithm.filter_groups.enable=True \
+# algorithm.filter_groups.max_num_gen_batches=2 \

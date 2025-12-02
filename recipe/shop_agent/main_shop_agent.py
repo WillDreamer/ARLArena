@@ -16,9 +16,9 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 """
 
 import os
-
 import hydra
 import ray
+from omegaconf import OmegaConf, open_dict
 
 from recipe.shop_agent.ppo.ray_trainer import ShopAgentTrainer
 
@@ -184,25 +184,38 @@ class TaskRunner:
         # Add a reference policy worker if KL loss or KL reward is used.
         self.add_ref_policy_worker(config, actor_rollout_cls)
 
-
+        if config.algorithm.adv_estimator == 'dapo':
+            config.reward_model.reward_manager = 'dapo'
         reward_manager_name = config.reward_model.get("reward_manager", "episode")
         if reward_manager_name == 'episode':
             from agent_system.reward_manager.episode import EpisodeRewardManager
             reward_manager_cls = EpisodeRewardManager
+            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, normalize_by_length=False)
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, normalize_by_length=False)
+
+        elif reward_manager_name == 'dapo':
+            from agent_system.reward_manager.dapo import DAPORewardManager
+            reward_manager_cls = DAPORewardManager
+            reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, overlong_buffer_cfg_len=300, overlong_max_resp_len=config.data.max_response_length)
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, overlong_buffer_cfg_len=300, overlong_max_resp_len=config.data.max_response_length)
         else:
             raise NotImplementedError
-
-        reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0, normalize_by_length=False)
-
-        # Note that we always use function-based RM for validation
-        val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, normalize_by_length=False)
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 
         assert config.actor_rollout_ref.rollout.n == 1, "In verl, actor_rollout_ref.rollout.n>1 is for GRPO. In verl+env, we keep n=1, and achieve GRPO by env.rollout.n"
 
         from agent_system.multi_turn_rollout import TrajectoryCollector
-        traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
+        if config.algorithm.adv_estimator == 'dapo':
+            with open_dict(config):
+                config.algorithm.filter_groups.enable=True
+                config.algorithm.filter_groups.max_num_gen_batches=2
+            traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
+        else:
+            traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
+
 
         from verl.utils.dataset.rl_dataset import collate_fn
 
