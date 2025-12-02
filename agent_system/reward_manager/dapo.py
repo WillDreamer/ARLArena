@@ -83,7 +83,7 @@ class DAPORewardManager:
             overlong_buffer_len = self.overlong_buffer_cfg_len
             expected_len = self.overlong_max_resp_len - overlong_buffer_len
             exceed_len = valid_response_length - expected_len
-            overlong_penalty_factor = 1
+            overlong_penalty_factor = 0.1
             overlong_reward = min(-exceed_len / overlong_buffer_len * overlong_penalty_factor, 0)
             score += overlong_reward
             

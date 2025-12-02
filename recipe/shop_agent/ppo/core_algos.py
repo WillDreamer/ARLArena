@@ -514,7 +514,9 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
 ## ================================================================
 ## ============================= 8️⃣ DAPO ==========================
 ## ================================================================
-# 🌟 Note: DAPO TBD
+# 🌟 Note: DAPO uses the same advantage computation as Grpo.
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 
 
 ## ================================================================
@@ -523,6 +525,7 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
 # 🌟 Note: Dr.GRPO only changes norm_adv_by_std_in_grpo=False
 # 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
 #    @register_policy_loss("vanilla")
+# ray_trainer.py: self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
 
 ## =================================================================
 ## ============================= 🔟 GSPO ===========================
