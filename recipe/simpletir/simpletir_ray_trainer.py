@@ -54,7 +54,7 @@ from verl.trainer.ppo.ray_trainer import (
 from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl.utils.tracking import ValidationGenerationsLogger
-from recipe.simpletir.ppo import core_algos
+# from recipe.simpletir.ppo import core_algos
 from enum import Enum
 WorkerType = Type[Worker]
 
@@ -330,12 +330,13 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO):
-        # GRPO, AEPO, GSPO, SAPO, and CISPO use the same advantage computation
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO, AdvantageEstimator.DAPO):
+        # GRPO, AEPO, GSPO, SAPO, CISPO, and DAPO use the same advantage computation
         # AEPO's entropy balancing is handled in the loss function (compute_policy_loss_aepo)
         # GSPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_gspo)
         # SAPO's sequence-level importance ratio is handled in the loss function (compute_policy_loss_sapo)
         # CISPO's contrastive importance sampling is handled in the loss function (compute_policy_loss_cispo)
+        # DAPO's decoupled clip and dynamic sampling is handled in the loss function
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
             # If multi-turn, replace the mask with the relevant part of loss_mask
@@ -460,6 +461,7 @@ class AdvantageEstimator(str, Enum):
     CISPO = "cispo"  # Contrastive Importance Sampling Policy Optimization
     EMPG = 'empg'
     DRGRPO = "drgrpo"  # Dr.GRPO: Group Relative Policy Optimization without token averaging
+    DAPO = "dapo"  # Decoupled Clip and Dynamic Sampling Policy Optimization
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -544,6 +546,7 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
             AdvantageEstimator.CISPO,
             AdvantageEstimator.EMPG,
             AdvantageEstimator.DRGRPO,
+            AdvantageEstimator.DAPO,
         ]:
             self.use_critic = False
         else:
@@ -580,6 +583,12 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
                 # Also set for entropy loss if it exists
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
                     self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
+
+        # Force rejection_sampling=True and oversample_multiplier=2 for DAPO
+        if adv_estimator == AdvantageEstimator.DAPO:
+            with open_dict(self.config):
+                self.config.trainer.rejection_sample = True
+                self.config.trainer.oversample_multiplier = 2
 
         self._validate_config()
         self._create_dataloader()

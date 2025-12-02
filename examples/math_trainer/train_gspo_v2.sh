@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -15,7 +15,7 @@ cd /home/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=512
+TRAIN_BATCH_SIZE=16
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=4
@@ -25,12 +25,12 @@ VAL_BEFORE_TRAIN=False
 MAX_PROMPT_LENGTH=8000
 MAX_RESPONSE_LENGTH=8000
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=128
+PPO_MINI_BATCH_SIZE=16
 PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=2
+TOTAL_EPOCHS=1
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
@@ -38,7 +38,7 @@ MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=True #mask for now
-ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
+ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1
 REJECTION_SAMPLE=False
 SP_SIZE=1
 GRAD_CLIP=1.0
@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=simpletir_math
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_data_dir
+RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_gspo_seq
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -222,10 +222,10 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1336
-DASHBOARD_PORT=1337
+PORT=5324
+DASHBOARD_PORT=5325
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
-ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
+ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT --num-gpus $NUM_GPUS
 RUN_NAME+="_$MODEL_NAME"
 
 
@@ -309,7 +309,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=gspo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
@@ -324,8 +324,6 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     actor_rollout_ref.actor.fsdp_config.param_offload=$ACTOR_PARAMETER_OFFLOAD \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$ACTOR_OPTIMIZER_OFFLOAD \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$SP_SIZE \
-    actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE \
     actor_rollout_ref.rollout.gpu_memory_utilization=$ROLLOUT_GPU_MEMORY_UTIL \
@@ -334,6 +332,8 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     actor_rollout_ref.rollout.val_kwargs.n=$N_VAL \
     actor_rollout_ref.rollout.val_kwargs.temperature=$VAL_TEMPERATURE \
     actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
     actor_rollout_ref.ref.ulysses_sequence_parallel_size=$SP_SIZE\
     trainer.rejection_sample=$REJECTION_SAMPLE \
