@@ -103,7 +103,7 @@ do
         env.max_steps=15 \
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-        trainer.rollout_data_dir=/data1/whx/ARLArena/outputs/${experiment_name} \
+        trainer.rollout_data_dir=./outputs/${experiment_name} \
         trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
@@ -114,5 +114,5 @@ do
         trainer.test_freq=10 \
         trainer.total_epochs=150 \
         trainer.max_actor_ckpt_to_keep=2 \
-        trainer.val_before_train=False $@ | tee -a ${experiment_name}.log
+        trainer.val_before_train=False $@ | tee -a outputs/${experiment_name}.log
 done
