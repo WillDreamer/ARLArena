@@ -20,7 +20,6 @@ CRITIC_LR_WARMUP_STEPS_RATIO=0.05
 CRITIC_PPO_MICRO_TOKEN=16000
 CRITIC_PPO_MINI_BATCH_SIZE=64
 
-ADV_ESTIMATOR=gae
 MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
@@ -28,26 +27,27 @@ N_VAL=4
 ROLLOUT_N=4
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=True
+VAL_BEFORE_TRAIN=False
 MAX_PROMPT_LENGTH=16384
 MAX_RESPONSE_LENGTH=16384
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=128
+PPO_MINI_BATCH_SIZE=64
 PPO_MICRO_TOKEN=24000
+LOG_PROB_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
-# VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
+# VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test")
 VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
-ROLLOUT_GPU_MEMORY_UTIL=0.4
-ACTOR_OPTIMIZER_OFFLOAD=True
-ACTOR_PARAMETER_OFFLOAD=True
+ROLLOUT_GPU_MEMORY_UTIL=0.3
+ACTOR_OPTIMIZER_OFFLOAD=False
+ACTOR_PARAMETER_OFFLOAD=False
 MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=False #mask for now
-ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
+ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1
 REJECTION_SAMPLE=False
-SP_SIZE=1
+SP_SIZE=2
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
 ACC_FILTER=0.0_1.0
@@ -65,12 +65,11 @@ GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
 PROJECT_NAME=math_trainer
 
-BASE_RUN_NAME=math_p16384_r16384_n4_${MODEL_NAME}_sample_${ADV_ESTIMATOR}
+BASE_RUN_NAME=math_p16384_r16384_n4_${MODEL_NAME}_ppo_n4_r4_t1.0_p128_m24000_c64_m16000
 # LOG_FILE_PATH=/local/xw27/ARLArena/log_$RUN_NAME.log
 # CHECKPOINT_PATH=/local/xw27/ARLArena/checkpoints_$RUN_NAME
 # ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
 
-mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
   RESUME_MODE="auto"
@@ -164,6 +163,7 @@ generate_suffix() {
 echo "Arguments received: $@"
 
 
+
 # Parse named arguments
 while [[ "$#" -gt 0 ]]; do
   echo "Processing: $1"
@@ -228,8 +228,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-# PORT=1336
-# DASHBOARD_PORT=1337
+# PORT=3343
+# DASHBOARD_PORT=3344
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 
@@ -307,6 +307,7 @@ if [ "$WANDB_API_KEY" != "" ]; then
 fi
 
 
+
 for seed in 0 42
 do
     SEED=$seed
@@ -323,7 +324,7 @@ do
 
     PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
         --config-name $CONFIG_NAME \
-        algorithm.adv_estimator=$ADV_ESTIMATOR \
+        algorithm.adv_estimator=gae \
         data.train_files=$TRAIN_FILES \
         data.val_files=$VALID_FILES \
         data.train_batch_size=$TRAIN_BATCH_SIZE \
@@ -352,6 +353,11 @@ do
         actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
         actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
         actor_rollout_ref.ref.ulysses_sequence_parallel_size=$SP_SIZE\
+        critic.optim.lr=$CRITIC_LR \
+        critic.optim.lr_warmup_steps_ratio=$CRITIC_LR_WARMUP_STEPS_RATIO \
+        critic.model.path=$MODEL_NAME \
+        critic.ppo_max_token_len_per_gpu=$CRITIC_PPO_MICRO_TOKEN \
+        critic.ppo_mini_batch_size=$CRITIC_PPO_MINI_BATCH_SIZE \
         trainer.rejection_sample=$REJECTION_SAMPLE \
         trainer.acc_filter=$ACC_FILTER \
         trainer.acc_filter_low=$ACC_FILTER_LOW \
