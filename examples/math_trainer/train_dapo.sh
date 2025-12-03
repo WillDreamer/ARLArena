@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -22,8 +22,8 @@ ROLLOUT_N=4
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8192
-MAX_RESPONSE_LENGTH=16384
+MAX_PROMPT_LENGTH=8000
+MAX_RESPONSE_LENGTH=8000
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
@@ -32,8 +32,8 @@ TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/hom
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
 VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
-ACTOR_OPTIMIZER_OFFLOAD=True
-ACTOR_PARAMETER_OFFLOAD=True
+ACTOR_OPTIMIZER_OFFLOAD=False
+ACTOR_PARAMETER_OFFLOAD=False
 MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
@@ -57,9 +57,10 @@ NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
 PROJECT_NAME=simpletir_math
+ADV_ESTIMATOR=dapo
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_noover
+RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_$ADV_ESTIMATOR
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -213,6 +214,7 @@ fi
 
 # ======================== start ray ========================
 RAY_TMP=~/ARLArena/outputs
+# rm -rf $RAY_TMP
 mkdir -p $RAY_TMP
 export RAY_TMPDIR="$RAY_TMP"
 export TMPDIR="$RAY_TMP"
@@ -222,8 +224,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1380
-DASHBOARD_PORT=1381
+PORT=1348
+DASHBOARD_PORT=1349
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -309,7 +311,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=$ADV_ESTIMATOR \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
