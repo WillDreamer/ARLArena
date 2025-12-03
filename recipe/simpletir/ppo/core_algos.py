@@ -24,8 +24,48 @@ import torch
 
 import verl.utils.torch_functional as verl_F
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 from verl import DataProto
+import uuid
+from omegaconf import DictConfig
+from difflib import SequenceMatcher
+from typing import Any, Callable, Optional
+from typing import Sequence, List, Dict, Any
+from verl.trainer.config import AlgoConfig
+from verl.utils.import_utils import deprecated
+from verl.workers.config import ActorConfig
+
+PolicyLossFn = Callable[
+    [
+        torch.Tensor,  # old_log_prob
+        torch.Tensor,  # log_prob
+        torch.Tensor,  # advantages
+        torch.Tensor,  # response_mask
+        str,  # loss_agg_mode
+        Optional[DictConfig | AlgoConfig],  # config
+    ],
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+]
+
+POLICY_LOSS_REGISTRY: dict[str, PolicyLossFn] = {}
+
+
+def register_policy_loss(name: str) -> Callable[[PolicyLossFn], PolicyLossFn]:
+    """Register a policy loss function with the given name.
+
+    Args:
+        name (str): The name to register the policy loss function under.
+
+    Returns:
+        function: Decorator function that registers the policy loss function.
+    """
+
+    def decorator(func: PolicyLossFn) -> PolicyLossFn:
+        POLICY_LOSS_REGISTRY[name] = func
+        return func
+
+    return decorator
+
 
 
 class AdaptiveKLController:
@@ -65,7 +105,11 @@ def get_kl_controller(kl_ctrl):
     else:
         raise NotImplementedError
 
-
+## =================================================================
+## =============================1️⃣ PPO =============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_gae_advantage_return(
     token_level_rewards: torch.Tensor,
     values: torch.Tensor,
@@ -110,14 +154,20 @@ def compute_gae_advantage_return(
         advantages = verl_F.masked_whiten(advantages, response_mask)
     return advantages, returns
 
-
+## =================================================================
+## =============================2️⃣ GRPO ============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
+    traj_index: np.ndarray,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: str = True,
+    compute_mean_std_cross_steps: bool = True,
 ):
     """
     Compute advantage for GRPO, operating only on Outcome reward
@@ -131,6 +181,9 @@ def compute_grpo_outcome_advantage(
             whether to scale the GRPO advantage.
             If True, the advantage is scaled by the std, as in the original GRPO.
             If False, the advantage is not scaled, as in Dr.GRPO (https://arxiv.org/abs/2503.20783).
+        compute_mean_std_cross_steps: bool
+            If True (more stable), the mean and std are computed across steps within one group. 
+            If False (i.e., standard episode-level adv), the mean and std are computed across trajectories within one group.
 
     Returns:
         advantages: `(torch.Tensor)`
@@ -143,10 +196,26 @@ def compute_grpo_outcome_advantage(
     id2score = defaultdict(list)
     id2mean = {}
     id2std = {}
+    traj2steps = defaultdict(list)  # key: (idx, traj), value: list of step-score tensors
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
-            id2score[index[i]].append(scores[i])
+            key = (index[i], traj_index[i])
+            traj2steps[key].append(scores[i])
+
+        if compute_mean_std_cross_steps:
+            # Every step is a sample: add all step-scores into id2score[index]
+            for (idx, traj), step_list in traj2steps.items():
+                for s in step_list:
+                    id2score[idx].append(s)
+        else:
+            # Per-trajectory average: for each (idx, traj) compute mean across its steps,
+            # then use that mean as one sample for the group identified by idx.
+            for (idx, traj), step_list in traj2steps.items():
+                # stack step tensors and compute mean for this trajectory
+                stacked = torch.stack(step_list)  # shape (num_steps_in_traj,)
+                traj_mean = torch.mean(stacked)
+                id2score[idx].append(traj_mean)
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
@@ -170,8 +239,10 @@ def compute_grpo_passk_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
+    traj_index: np.ndarray,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
+    compute_mean_std_cross_steps: bool = True,
 ):
     """
     Compute advantage for Pass@k using a GRPO-style outcome reward formulation.
@@ -185,6 +256,9 @@ def compute_grpo_passk_outcome_advantage(
         index: (bs,) → group ID per sample
         epsilon: float for numerical stability
         norm_adv_by_std_in_grpo: if True, normalize advantage by std within group
+        compute_mean_std_cross_steps: bool
+            If True (more stable), the mean and std are computed across steps within one group. 
+            If False (i.e., standard episode-level adv), the mean and std are computed across trajectories within one group.
 
     Returns:
         advantages: (bs, response_length)
@@ -195,12 +269,17 @@ def compute_grpo_passk_outcome_advantage(
 
     id2scores = defaultdict(list)
     id2indices = defaultdict(list)
+    seen_pairs = set()
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
+            if (index[i], traj_index[i]) in seen_pairs:
+                continue
             idx = index[i]
             id2scores[idx].append(scores[i])
             id2indices[idx].append(i)
+            if not compute_mean_std_cross_steps:
+                seen_pairs.add((index[i], traj_index[i]))
         for idx in id2scores:
             rewards = torch.stack(id2scores[idx])  # (k,)
             if rewards.numel() < 2:
@@ -217,57 +296,12 @@ def compute_grpo_passk_outcome_advantage(
     advantages = advantages.unsqueeze(-1) * response_mask
     return advantages, advantages
 
-def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
-    """
-    Args:
-        tokenizer: The tokenizer for identifying response segments.
-        batch: A data batch with 'responses', 'old_entropy', 'advantages'.
-        k (float): Hyperparameter for self-calibrating gradient scaling.
-        k_f (float): Hyperparameter for the future clarity bonus.
-        zeta (float): Hyperparameter for the future clarity bonus.
-    """
-
-    # --- 1. Calculate Modulated Advantage Components ---
-    H = np.array(batch.batch['old_entropy'])
-    
-    # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
-    min_H, max_H = np.min(H), np.max(H)
-    H_norm = (H - min_H) / (max_H - min_H + 1e-8)
-
-    # Self-calibrating gradient scaling g(H) (Eq. 10)
-    g_H_unnormalized = np.exp(-k * H_norm)
-    mean_g_H = np.mean(g_H_unnormalized)
-    g_H = g_H_unnormalized / (mean_g_H + 1e-8)
-    
-    # Future clarity bonus f(H) (Eq. 11)
-    f_H = np.exp(-k_f * H_norm)
-
-    # Convert to tensors for PyTorch operations
-    g_H = torch.tensor(g_H, device=batch.batch['advantages'].device, dtype=torch.float32)
-    f_H = torch.tensor(f_H, device=batch.batch['advantages'].device, dtype=torch.float32)
-
-    # --- 2. Second Pass: Apply Advantage Modulation (Eq. 8) ---
-    step_advantages = []
-    for i, segment in enumerate(segments_to_modify):
-        idx, start, end = segment['sample_idx'], segment['start'], segment['end']
-        
-        # Apply self-calibrating gradient scaling
-        batch.batch['advantages'] *= g_H[i]
-        
-        # Add future clarity bonus if there is a next step
-        next_seg = segments_to_modify[i+1] if i+1 < len(segments_to_modify) else None
-        if next_seg and next_seg['sample_idx'] == idx:
-            batch.batch['advantages'][idx][start:end] += zeta * f_H[i+1]
-        step_advantages.append(batch.batch['advantages'][idx][start])
-            
-    # --- 3. Final Advantage Normalization (Eq. 7) ---
-    if step_advantages:
-        final_adv_mean = torch.mean(torch.stack(step_advantages))
-        batch.batch['advantages'] -= final_adv_mean
-
-    return batch.batch['advantages'], batch.batch['advantages']
-    
-def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, epsilon: float = 1e-6):
+## =================================================================
+## =========================3️⃣ Reinforce++ =========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
     """
     Compute advantage for RF++-baseline (https://arxiv.org/abs/2501.03262), operating only on Outcome reward
     (with only one scalar reward for each response).
@@ -288,10 +322,15 @@ def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: 
 
     id2score = defaultdict(list)
     id2mean = {}
+    seen_pairs = set()
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
+            if (index[i], traj_index[i]) in seen_pairs:
+                continue
             id2score[index[i]].append(scores[i])
+            if not compute_mean_std_cross_steps:
+                seen_pairs.add((index[i], traj_index[i]))
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
@@ -308,7 +347,12 @@ def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: 
     return scores, scores
 
 
-def compute_rloo_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: np.ndarray, epsilon: float = 1e-6):
+## =================================================================
+## =============================4️⃣ RLOO ============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_rloo_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: np.ndarray, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
     """
     Compute advantage for RLOO based on https://arxiv.org/abs/2402.14740
     Args:
@@ -327,10 +371,15 @@ def compute_rloo_outcome_advantage(token_level_rewards: torch.Tensor, response_m
 
     id2score = defaultdict(list)
     id2mean = {}
+    seen_pairs = set()
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
+            if (index[i], traj_index[i]) in seen_pairs:
+                continue
             id2score[index[i]].append(scores[i])
+            if not compute_mean_std_cross_steps:
+                seen_pairs.add((index[i], traj_index[i]))
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
@@ -379,7 +428,11 @@ def compute_reinforce_plus_plus_outcome_advantage(token_level_rewards: torch.Ten
 
     return advantages, returns
 
-
+## =================================================================
+## =============================5️⃣ ReMaX ===========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_baselines: torch.Tensor, response_mask: torch.Tensor):
     """
     Compute advantage for ReMax, operating only on Outcome reward
@@ -408,10 +461,197 @@ def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_ba
     return advantages, returns
 
 
+## =================================================================
+## =============================6️⃣ GiGPO ===========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
+                                   step_rewards: torch.Tensor,
+                                   response_mask: torch.Tensor,
+                                   anchor_obs: np.array,
+                                   index: np.array,
+                                   traj_index: np.array,
+                                   epsilon: float = 1e-6,
+                                   step_advantage_w: float = 1.0,
+                                   mode: str = "mean_norm",
+                                   enable_similarity: bool = False,
+                                   similarity_thresh: float = 0.95,
+                                   ):
+    """
+    Compute the advantages for GiGPO (https://arxiv.org/abs/2505.10978).
+    """
+    if mode == "mean_std_norm":
+        remove_std = False
+    elif mode == "mean_norm":
+        remove_std = True
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    # Compute episode relative advantages (Eq. 3 in the paper).
+    episode_advantages = episode_norm_reward(token_level_rewards, response_mask, index, traj_index, epsilon, remove_std)
+    
+    # Anchor state grouping (Eq. 6 in the paper).
+    step_group_uids = build_step_group(anchor_obs, index, enable_similarity, similarity_thresh)
+
+    # Compute step relative advantages (Eq. 7 in the paper).
+    step_advantages = step_norm_reward(step_rewards, response_mask, step_group_uids, epsilon, remove_std)
+
+    # Compute joint advantages (Eq. 8 in the paper).
+    scores = episode_advantages + step_advantage_w * step_advantages
+    return scores, scores
+
+
+## ================================================================
+## ============================= 7️⃣ AEPO ==========================
+## ================================================================
+# 🌟 Note: AEPO does not have its own specific advantage estimator.
+#    Instead, it uses the same advantage estimation as GRPO by default.
+# 📄 The loss function for AEPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("aepo").
+
+
+## ================================================================
+## ============================= 8️⃣ DAPO ==========================
+## ================================================================
+# 🌟 Note: DAPO TBD
+
+
+## ================================================================
+## ============================ 9️⃣ Dr GRPO ========================
+## ================================================================
+# 🌟 Note: Dr.GRPO only changes norm_adv_by_std_in_grpo=False
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+
+## =================================================================
+## ============================= 🔟 GSPO ===========================
+## =================================================================
+# 🌟 Note: GSPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for GSPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("gspo").
+
+## ================================================================
+## =========================== 1️⃣1️⃣ CISPO ==========================
+## ================================================================
+# 🌟 Note: CISPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for CISPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("cispo").
+
+
+## ================================================================
+## =========================== 1️⃣2️⃣ EMPG ==========================
+## ================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
+    """
+    batch.batch contains:
+        - 'responses': token ids
+        - 'old_entropy': [B, T] token-level entropy (per token)
+        - 'advantages': [B, T] token-level advantages (usually per-trajectory A broadcast)
+    """
+
+    device = batch.batch['advantages'].device
+    eps = 1e-8
+
+    # --- 1. First pass: collect step segments and step-level entropies (Eq. 7) ---
+    step_infos = []       # list of (sample_idx, start, end)
+    step_entropies = []   # list of scalars H_t
+
+    B = batch.batch.batch_size[0]
+
+    for i in range(B):
+        print(f"batch.batch['responses'][i]: {batch.batch['responses'][i]}")
+        
+        token_segments = process_token_sequences(
+            batch.batch['responses'][i],
+            [151644, 77091, 198],   # your "assistant step" delimiters
+            [151645]                # your end-of-step marker
+        )
+        print(f"token_segments: {token_segments}")
+        for start, end in token_segments:
+            if start >= end:
+                continue
+            # step-level entropy = mean token entropy over this step
+            H_step = batch.batch['old_entropy'][i][start:end].mean().item()
+            step_infos.append((i, start, end))
+            step_entropies.append(H_step)
+
+    # If no steps found, just return
+    if not step_infos:
+        return batch.batch['advantages'], batch.batch['advantages']
+
+    # --- 2. Compute g(H) and f(H) on step-level entropies (Eq. 10–12) ---
+    H = np.array(step_entropies, dtype=np.float32)  # shape [N_steps]
+
+    min_H = float(H.min())
+    max_H = float(H.max())
+    H_norm = (H - min_H) / (max_H - min_H + eps)   # Eq. 12
+
+    # self-calibrating gradient scaling (Eq. 10)
+    g_base = np.exp(-k * H_norm)
+    g_H = g_base / (g_base.mean() + eps)           # mean(g_H) = 1 over steps
+
+    # future clarity bonus (Eq. 11)
+    f_H = np.exp(-k_f * H_norm)
+
+    g_H = torch.tensor(g_H, device=device, dtype=torch.float32)   # [N_steps]
+    f_H = torch.tensor(f_H, device=device, dtype=torch.float32)   # [N_steps]
+
+    # --- 3. Build step-level modulated advantages A_mod(i,t) (Eq. 8) ---
+    #
+    # Assume current token-level advantages in this step are constant (= A^(i))
+    # or already reflect your trajectory-level A^(i). We derive a scalar A_mod_step
+    # and then broadcast it to tokens in [start:end].
+    #
+    N_steps = len(step_infos)
+    step_Amod = torch.zeros(N_steps, device=device, dtype=torch.float32)
+
+    # First extract a scalar "base" advantage per step (A^(i)).
+    # Here we just take the mean over tokens in that step.
+    base_step_A = torch.zeros(N_steps, device=device, dtype=torch.float32)
+    for s, (i, start, end) in enumerate(step_infos):
+        base_step_A[s] = batch.batch['advantages'][i, start:end].mean()
+
+    # Now apply Eq. (8): A_mod(i,t) = A^(i) * g(H_t) + zeta * f(H_{t+1})
+    for s, (i, start, end) in enumerate(step_infos):
+        A_i = base_step_A[s]
+        A_mod = A_i * g_H[s]
+
+        # future clarity: use next step if it belongs to same trajectory
+        if s + 1 < N_steps and step_infos[s + 1][0] == i:
+            A_mod = A_mod + zeta * f_H[s + 1]
+
+        step_Amod[s] = A_mod
+
+    # --- 4. Final batch-level normalization (Eq. 13) ---
+    mean_Amod = step_Amod.mean()
+    step_Afinal = step_Amod - mean_Amod  # [N_steps]
+
+    # --- 5. Write back token-level advantages: broadcast per-step Afinal to tokens ---
+    for s, (i, start, end) in enumerate(step_infos):
+        batch.batch['advantages'][i, start:end] = step_Afinal[s]
+
+    return batch.batch['advantages'], batch.batch['advantages']
+
+## ================================================================
+## =========================== 1️⃣3️⃣ SAPO ===========================
+## ================================================================
+# 🌟 Note: SAPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for SAPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("sapo").
+
+## ================================================================
+## ======================== 1️⃣4️⃣ Vanilla Grpo ======================
+## ================================================================
+# 🌟 Note: Vanilla Grpo set compute_mean_std_cross_steps=False
+# 📄 The loss function for Vanilla Grpo is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla").
+
 def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
     kl = old_log_prob - ref_log_prob
     return token_level_scores - kl * kl_ratio
-
 
 def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str):
     """
@@ -511,7 +751,6 @@ def compute_policy_loss(
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
-
 
 
 def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean"):
@@ -666,3 +905,382 @@ def compute_pf_ppo_reweight_data(
     resampled_data.meta_info = resampled_meta_info
 
     return resampled_data
+
+
+## ================================================================
+## ========================= General Utils ========================
+## ================================================================
+
+def process_token_sequences(
+    token_id_tensor: torch.Tensor,
+    start_end_delimiter_seq: list[int] = [151644, 77091, 198],
+    target_delimiter_seq: list[int] = [151645],
+    head_sequence: list[int] = [151645, 151644, 87280]
+) -> dict:
+    """
+    Processes a token ID tensor to find tokens between specific delimiters and
+    the end index of a leading sequence.
+    Args:
+        token_id_tensor (torch.Tensor): A 1D PyTorch tensor of token IDs.
+        start_end_delimiter_seq (list[int]): The sequence marking the start and end
+                                              of the segments to extract.
+                                              For your case, this is [151644, 77091, 1699]
+                                              for start, and [151645] for end.
+                                              This function assumes the 'start' sequence
+                                              is [151644, 77091, 1699] and the 'end' sequence
+                                              is [151645] as per your previous requests.
+        target_delimiter_seq (list[int]): The sequence to mark the end of segments
+                                            when found after start_end_delimiter_seq.
+                                            For your case, this is [151645].
+        head_sequence (list[int]): The sequence to find from the beginning of the tensor,
+                                   and return its exclusive end index.
+                                   For your case, this is [151645, 151644, 872].
+    Returns:
+        dict: A dictionary containing:
+              - 'between_delimiters': A list of tuples, where each tuple contains:
+                                      (start_index_of_tokens, end_index_of_tokens, tokens_tensor).
+                                      These are the tokens found between `start_end_delimiter_seq`
+                                      and `target_delimiter_seq`.
+              - 'first_head_sequence_end_index': The exclusive end index of the first
+                                                 `head_sequence` found from the beginning of the tensor.
+                                                 Returns -1 if not found.
+    """
+    if not isinstance(token_id_tensor, torch.Tensor) or token_id_tensor.ndim != 1:
+        raise ValueError("token_id_tensor must be a 1D PyTorch tensor.")
+    if not start_end_delimiter_seq or not target_delimiter_seq or not head_sequence:
+        raise ValueError("All sequence arguments cannot be empty.")
+    results = []
+    start_seq_len = len(start_end_delimiter_seq)
+    target_seq_len = len(target_delimiter_seq)
+    head_seq_len = len(head_sequence)
+    start_seq_tensor = torch.tensor(start_end_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    target_seq_tensor = torch.tensor(target_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    head_seq_tensor = torch.tensor(head_sequence, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    # --- Part 1: Find the end index of the first head_sequence from the beginning ---
+    for k in range(len(token_id_tensor) - head_seq_len + 1):
+        if torch.equal(token_id_tensor[k : k + head_seq_len], head_seq_tensor):
+            results.append((0, k + head_seq_len))
+            break # Found the first one, no need to search further
+    # --- Part 2: Find tokens between start_end_delimiter_seq and target_delimiter_seq ---
+    for i in range(len(token_id_tensor) - start_seq_len + 1):
+        if torch.equal(token_id_tensor[i : i + start_seq_len], start_seq_tensor):
+            for j in range(i + start_seq_len, len(token_id_tensor) - target_seq_len + 1):
+                if torch.equal(token_id_tensor[j : j + target_seq_len], target_seq_tensor):
+                    tokens_start_idx = i + start_seq_len
+                    tokens_end_idx = j
+                    results.append((tokens_start_idx, tokens_end_idx + 1))
+                    break # Found a pair, move to find the next start_end_delimiter_seq
+    return results
+
+def to_hashable(x):
+    """Convert an object into a hashable type (used for clustering/grouping)."""
+    if isinstance(x, (int, float, str, bool)):
+        return x
+    elif isinstance(x, (np.integer, np.floating)):
+        return x.item()
+    elif isinstance(x, np.ndarray):
+        return tuple(x.flatten())
+    elif isinstance(x, (list, tuple)):
+        return tuple(to_hashable(e) for e in x)
+    elif isinstance(x, dict):
+        return tuple(sorted((k, to_hashable(v)) for k, v in x.items()))
+    else:
+        raise TypeError(f"Unsupported type: {type(x)}")
+
+def summarize_group_size(group_size: list):
+    """
+    Summarize the dynamics of step-level group.
+    Args:
+        group_size : List[int]
+    """
+    counts = Counter(group_size)
+    total = sum(counts.values())
+    max_size = max(counts)
+
+    summary = {}
+    for size in range(1, max_size + 1):
+        cnt = counts.get(size, 0)
+        prop = cnt / total if total > 0 else 0
+        summary[size] = (cnt, prop)
+
+    print("Summary of step-level group sizes:")
+    print("Size | Count | Proportion")
+    print("-------------------------")
+    for size, (cnt, prop) in summary.items():
+        if prop:
+            print(f"{size:>4} | {cnt:>5} | {prop:>9.2%}")
+            
+def are_similar(a: str, b: str, threshold: float = 0.95) -> bool:
+    """
+    Check whether two text observations are similar enough.
+    
+    Args:
+        a, b (str): Input strings to compare.
+        threshold (float): Minimum similarity ratio.
+    
+    Returns:
+        bool: True if similarity >= threshold.
+    """
+    if not isinstance(a, str) or not isinstance(b, str):
+        raise ValueError("Only text-based observations are supported for similarity-based GiGPO in this version.")
+    return SequenceMatcher(None, a, b).ratio() >= threshold
+
+def compute_step_discounted_returns(batch: DataProto, gamma: float):
+    """
+    Compute discounted returns for each trajectory. (Eq. 5 in the paper)
+    
+    Args:
+        batch (DataProto): Input batch.
+        gamma (float): Discount factor.
+    
+    Returns:
+        torch.Tensor: Discounted returns.
+    """
+    rewards = batch.non_tensor_batch['rewards'].astype(np.float32)
+    traj_uids = batch.non_tensor_batch['traj_uid']
+    active_masks = batch.non_tensor_batch['active_masks'].astype(np.float32)
+    returns_by_traj = {}
+    unique_traj_uids = np.unique(traj_uids)
+    for uid in unique_traj_uids:
+        # Get indices for this trajectory
+        traj_indices = np.where(traj_uids == uid)[0]
+        
+        # Extract rewards and masks for this trajectory
+        traj_rewards = rewards[traj_indices]
+        traj_active_masks = active_masks[traj_indices]
+        assert traj_active_masks.all(), "active_masks should be all 1s for the same trajectory"
+        
+        # Calculate returns
+        traj_returns = np.zeros_like(traj_rewards)
+        running_return = 0
+        
+        # Calculate returns from the end to the start
+        for t in reversed(range(len(traj_rewards))):
+            running_return = traj_rewards[t] + gamma * running_return
+            traj_returns[t] = running_return
+        
+        # Store the results
+        returns_by_traj[uid] = traj_returns
+    
+    # Recombine the returns into the original batch order
+    all_returns = np.zeros_like(rewards)
+    for i, uid in enumerate(traj_uids):
+        traj_indices = np.where(traj_uids == uid)[0]
+        idx_in_traj = np.where(traj_indices == i)[0][0]  # Find position of i in its trajectory
+        all_returns[i] = returns_by_traj[uid][idx_in_traj]
+    
+    all_returns = torch.tensor(all_returns, dtype=torch.float32, device=batch.batch['input_ids'].device)
+    return all_returns
+
+
+def episode_norm_reward(token_level_rewards: torch.Tensor,
+                        response_mask: torch.Tensor,
+                        index: np.array,
+                        traj_index: np.array,
+                        epsilon: float = 1e-6,
+                        remove_std: bool = True,
+                        compute_mean_std_cross_steps: bool = True,
+                        ):
+    """
+    Compute episode-level advantage using mean-std normalization for GiGPO.
+    (with only one scalar reward for each episode).
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        index: `(np.array)`
+            shape: (bs,)
+        traj_index: `(np.array)`
+            shape: (bs,)
+        epsilon: float
+            A small value to avoid division by zero.
+        remove_std: bool
+            If True, the standard deviation is removed from the normalization.
+        compute_mean_std_cross_steps: bool
+            If True (more stable), the mean and std are computed across steps within one group. 
+            If False (i.e., standard episode-level adv), the mean and std are computed across trajectories within one group.
+    
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        Returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+    response_length = token_level_rewards.shape[-1]
+    scores = token_level_rewards.sum(dim=-1)
+
+    id2score = defaultdict(list)
+    id2mean = {}
+    id2std = {}
+    seen_pairs = set()
+    with torch.no_grad():
+        bsz = scores.shape[0]
+        for i in range(bsz):
+            if (index[i], traj_index[i]) in seen_pairs:
+                continue
+            id2score[index[i]].append(scores[i])
+            if not compute_mean_std_cross_steps:
+                seen_pairs.add((index[i], traj_index[i]))
+
+        for idx in id2score:
+            if len(id2score[idx]) == 1:
+                id2mean[idx] = torch.tensor(0.0)
+                id2std[idx] = torch.tensor(1.0)
+            elif len(id2score[idx]) > 1:
+                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+                id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
+            else:
+                raise ValueError(f"no score in prompt index: {idx}")
+        for i in range(bsz):
+            if remove_std:
+                scores[i] = scores[i] - id2mean[index[i]]
+            else:
+                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+        episode_advantages = scores.unsqueeze(-1).tile([1, response_length]) * response_mask
+
+    return episode_advantages
+
+
+def build_step_group(anchor_obs: np.array, index: np.array, enable_similarity: bool = False, similarity_thresh: float = 0.95, summarize: bool = False):
+    """
+    Group observations by index and then cluster identical observations within each index group.
+    Assigns a unique step_group_uid (UUID) to each cluster.
+    
+    Parameters:
+    -----------
+    anchor_obs : np.array
+        Array of observation strings
+    index : np.array
+        Array of episode_group_uid
+    summarize : bool
+        Whether to summarize the group sizes (default: True)
+    enable_similarity : bool
+        Whether to enable similarity-based step-level grouping (default: False)
+    similarity_thresh : float
+        Threshold for similarity to consider two observations as identical (default: 1.0, meaning exact match)
+    
+    Returns:
+    --------
+    np.array
+        Array of step_group_uid values corresponding to the original anchor_obs array
+    """
+    if enable_similarity:
+        assert similarity_thresh > 0.0 and similarity_thresh < 1.0, "When enabling similarity-based step-level group, similarity_thresh should be in (0, 1)"
+
+    # Initialize the result array with placeholder values
+    step_group_uids = np.empty(len(anchor_obs), dtype=object)
+    
+    # Get unique indices
+    unique_indices = np.unique(index)
+
+    group_size: List[int] = []
+    # Process each unique index
+    for idx in unique_indices:
+        if not enable_similarity:
+            # Get all observations for this index using np.where
+            indices = np.where(index == idx)[0]
+            obs_group = anchor_obs[indices]
+            
+            # Create clusters for identical observations
+            clusters = defaultdict(list)
+            for i, obs in enumerate(obs_group):
+                clusters[to_hashable(obs)].append(indices[i])  # Store the original index position
+            
+            # Assign unique step_group_uid to each cluster
+            for obs, original_indices in clusters.items():
+                # Generate a UUID for this cluster
+                uid = str(uuid.uuid4())
+                
+                # Assign the same step_group_uid to all elements in this cluster
+                group_size.append(len(original_indices))
+                for original_idx in original_indices:
+                    step_group_uids[original_idx] = uid
+        else:
+            locs = np.where(index == idx)[0]
+            obs_group = anchor_obs[locs]
+
+            # Dynamically maintain clusters: [{rep: str, locs: List[int]} ...]
+            clusters: List[Dict[str, Any]] = []
+
+            for obs, loc in zip(obs_group, locs):
+                 # Try to place into an existing cluster
+                placed = False
+                for cluster in clusters:
+                    if are_similar(obs, cluster["rep"], similarity_thresh):
+                        cluster["locs"].append(loc)
+                        placed = True
+                        break
+                # If no matching cluster, create a new one
+                if not placed:
+                    clusters.append({"rep": obs, "locs": [loc]})
+
+            # Assign a UUID to each cluster
+            for cluster in clusters:
+                uid = str(uuid.uuid4())
+                group_size.append(len(cluster["locs"]))
+                for loc in cluster["locs"]:
+                    step_group_uids[loc] = uid
+
+        # Validate that all elements have been assigned a uid
+    if None in step_group_uids or np.any(step_group_uids == None):
+        missing_indices = np.where(step_group_uids == None)[0]
+        raise ValueError(f"Failed to assign UIDs to all observations. Missing at indices: {missing_indices}")
+
+    if summarize:
+        summarize_group_size(group_size)
+    print(f"Avg size of step-level group: {np.mean(group_size)}")
+    return step_group_uids
+
+
+def step_norm_reward(step_rewards: torch.Tensor,
+                      response_mask: torch.Tensor,
+                      index: np.array,
+                      epsilon: float = 1e-6,
+                      remove_std: bool = True,
+                      ):
+    """
+    Compute step-level advantage using mean-std normalization for GiGPO.
+    Args:
+        step_rewards: `(torch.Tensor)`
+            shape: (bs,)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+    
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        Returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+    response_length = response_mask.shape[-1]
+    scores = step_rewards.clone()
+
+    id2score = defaultdict(list)
+    id2mean = {}
+    id2std = {}
+
+    with torch.no_grad():
+        bsz = scores.shape[0]
+        for i in range(bsz):
+            id2score[index[i]].append(scores[i])
+
+        for idx in id2score:
+            if len(id2score[idx]) == 1:
+                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+                id2std[idx] = torch.tensor(1.0)
+            elif len(id2score[idx]) > 1:
+                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+                id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
+            else:
+                print(f"id2score: {id2score}")
+                print(f"len(id2score[idx]): {len(id2score[idx])}")
+                raise ValueError(f"no score in prompt index: {idx}")
+        for i in range(bsz):
+            if remove_std:
+                scores[i] = scores[i] - id2mean[index[i]]
+            else:
+                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+        step_advantages = scores.unsqueeze(-1).tile([1, response_length]) * response_mask
+    
+    return step_advantages
