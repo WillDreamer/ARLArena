@@ -12,6 +12,8 @@ data:
   filter_overlong_prompts: True
   max_start_length: 4096
   max_obs_length: 256
+  seed: 0
+  shuffle: True
   prompt: |
     Solve the following problem step by step. You now have the ability to selectively write executable Python code to enhance your reasoning process. The Python code will be executed by an external sandbox, and the output (after "Code execution result: ") is returned to aid your reasoning and help you arrive at the final answer. The Python code should be complete scripts, including necessary imports.
 
@@ -71,8 +73,8 @@ trainer:
   start_clip_step: 50
   critic_warmup: 0
   logger: ['console','wandb']
-  project_name: simpletir
-  experiment_name: simpletir_math
+  project_name: math_agent
+  experiment_name: math_agent_math
 
 critic:
   ppo_micro_batch_size_per_gpu: 4

@@ -1,4 +1,4 @@
-# Copyright 2024 Bytedance Ltd. and/or its affiliates
+# Copyright 2024 PRIME team and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,26 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import ast
-import asyncio
-import os
-import re
 import signal
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List
 
 import ray
 import torch
 from ray.exceptions import GetTimeoutError
 
-from recipe.simpletir.agent_utils import count_lines
-from recipe.simpletir.utils.reward_score import _default_compute_score
+from recipe.math_agent.utils.reward_score import _default_compute_score
 from verl import DataProto
-
-# if os.getenv("SANDBOX_ENDPOINT", None) is not None:
-#     from sandbox.local_sandbox import parallel_sandbox
-# else:
-#     from sandbox.internal_sandbox import parallel_sandbox
-from sandbox.local_sandbox import parallel_sandbox
 
 
 # Keep this outside the main wrapper function for clarity and efficiency.
@@ -67,152 +56,30 @@ def reward_func_timeout_ray(
         signal.signal(signal.SIGALRM, old_handler)
 
 
-def is_only_final_answer(code_str: str) -> bool:
-    try:
-        tree = ast.parse(code_str)
-        stmts = tree.body
-
-        if (
-            stmts
-            and isinstance(stmts[0], ast.Expr)
-            and isinstance(stmts[0].value, ast.Constant)
-            and isinstance(stmts[0].value.value, str)
-        ):
-            stmts = stmts[1:]
-
-        if len(stmts) != 1:
-            return False
-
-        stmt = stmts[0]
-        if not isinstance(stmt, ast.Expr):
-            return False
-
-        call = stmt.value
-        if not isinstance(call, ast.Call):
-            return False
-
-        func = call.func
-        if isinstance(func, ast.Name) and func.id == "final_answer":
-            return True
-
-        return False
-
-    except Exception:
-        return False
-
-
-class MathRewardExecManager:
-    """Math reward manager that executes code and only verifies the code stdout."""
+class MathRewardManager:
+    """
+    The Reward Manager is borrowed from https://github.com/PRIME-RL/PRIME
+    """
 
     def __init__(self, tokenizer, num_examine, compute_score=None) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or _default_compute_score
         self.timeout_seconds = 5
-        self.max_stdout_len = 1000
 
-    def __call__(self, data: DataProto):
-        # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
-        if "rm_scores" in data.batch.keys():
-            return data.batch["rm_scores"]
-
-        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-
-        already_print_data_sources = {}
-
-        response_ids = data.batch["responses"]
-        sequences_strs = self.tokenizer.batch_decode(
-            response_ids, skip_special_tokens=True
-        )
-        ground_truths = [
-            data_item.non_tensor_batch["reward_model"]["ground_truth"]
-            for data_item in data
-        ]
-        data_sources = data.non_tensor_batch["data_source"]
-        extra_infos = [
-            data_item.non_tensor_batch.get("extra_info", None) for data_item in data
-        ]
-
-        assert len(sequences_strs) == len(ground_truths) == len(data_sources)
-
-        # Parse code actions from responses
-        pattern = r"```(?:py|python)?\n(.*?)\n```"
-        use_code = [0] * len(data)
-        no_bug_code = [0] * len(data)
-        true_tool_use = [0] * len(data)
-        total_lines = [0] * len(data)
-        code_lines = [0] * len(data)
-        solution_strs = [""] * len(data)
-        response_strs = []
-        code_actions = []
-        for i in range(len(data)):
-            data_item = data[i]  # DataProtoItem
-
-            prompt_ids = data_item.batch["prompts"]
-            prompt_length = prompt_ids.shape[-1]
-
-            response_ids = data_item.batch["responses"]
-            valid_response_length = data_item.batch["attention_mask"][
-                prompt_length:
-            ].sum()
-            valid_response_ids = response_ids[:valid_response_length]
-
-            # decode
-            response_str = self.tokenizer.decode(
-                valid_response_ids, skip_special_tokens=True
-            )
-            response_strs.append(response_str)
-
-            match = re.search(pattern, response_str, re.DOTALL)
-            if match:
-                code = match.group(1).strip()
-                use_code[i] = 1
-                code_actions.append((i, code))
-
-        # Execute code actions in parallel
-        if len(code_actions) > 0:
-            tasks = []
-            for code_action in code_actions:
-                code_action = """
-def final_answer(result):
-    print(f"\\\\boxed{{{result}}}")
-
-""" + code_action[1]
-                tasks.append(code_action)
-
-            sandbox_success, sandbox_stdout, sandbox_stderr = asyncio.run(
-                parallel_sandbox(tasks, num_processes=256)
-            )
-            for j in range(len(code_actions)):
-                stdout = str(sandbox_stdout[j])
-                stderr = str(sandbox_stderr[j])
-                if len(stdout) > 0:
-                    solution_strs[code_actions[j][0]] += stdout[-self.max_stdout_len :]
-                if len(stderr) == 0:
-                    no_bug_code[code_actions[j][0]] = 1
-                    if not is_only_final_answer(code_actions[j][1]):
-                        true_tool_use[code_actions[j][0]] = 1
-
-                total_line, code_line = count_lines(code_actions[j][1])
-                total_lines.append(total_line)
-                code_lines.append(code_line)
-
-        # Compute rewards
-        scores: list[float] = [0.0] * len(solution_strs)
-        extra_info_dict: dict[
-            str, list[float]
+    def math_compute_score_parallel_with_ray(
+        self, data_sources, solution_strs, ground_truths, extra_infos
+    ):
+        scores: List[float] = [0.0] * len(solution_strs)
+        extra_info_dict: Dict[
+            str, List[float]
         ] = {}  # Key -> list of values for the batch
-        extra_info_dict["use_code"] = use_code
-        extra_info_dict["no_bug_code"] = no_bug_code
-        extra_info_dict["true_tool_use"] = true_tool_use
-        extra_info_dict["total_lines"] = total_lines
-        extra_info_dict["code_lines"] = code_lines
         print(
             f"Scoring process started over {len(solution_strs)} samples, waiting for results..."
         )
 
         futures = []
-        for i, response_str in enumerate(response_strs):
+        for i in range(len(solution_strs)):
             ground_truth = ground_truths[i]
             solution_str = solution_strs[i]
             data_source = data_sources[i]
@@ -280,6 +147,39 @@ def final_answer(result):
                         extra_info_dict[key] = [0.0] * len(solution_strs)
                     extra_info_dict[key][i] = value
 
+        return scores, extra_info_dict
+
+    def __call__(self, data: DataProto):
+        """We will expand this function gradually based on the available datasets"""
+
+        # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
+        if "rm_scores" in data.batch.keys():
+            return data.batch["rm_scores"]
+
+        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+
+        already_print_data_sources = {}
+
+        response_ids = data.batch["responses"]
+        sequences_strs = self.tokenizer.batch_decode(
+            response_ids, skip_special_tokens=True
+        )
+        ground_truths = [
+            data_item.non_tensor_batch["reward_model"]["ground_truth"]
+            for data_item in data
+        ]
+        data_sources = data.non_tensor_batch["data_source"]
+        extra_infos = [
+            data_item.non_tensor_batch.get("extra_info", None) for data_item in data
+        ]
+
+        assert len(sequences_strs) == len(ground_truths) == len(data_sources)
+
+        # it is very important to use ray to compute score in parallel!
+        scores, extra_info_dict = self.math_compute_score_parallel_with_ray(
+            data_sources, sequences_strs, ground_truths, extra_infos
+        )
+
         # batched scoring
         prompt_ids = data.batch["prompts"]
         prompt_length = prompt_ids.shape[-1]
@@ -290,10 +190,7 @@ def final_answer(result):
 
         for i in range(len(data)):
             data_source = data_sources[i]
-            # reward_tensor[i, valid_response_length[i].item() - 1] = scores[i]
-            reward_tensor[i, valid_response_length[i].item() - 1] = (
-                scores[i] * 0.5 if true_tool_use[i] == 0 else scores[i]
-            )
+            reward_tensor[i, valid_response_length[i].item() - 1] = scores[i]
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0

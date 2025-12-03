@@ -30,8 +30,8 @@ from torch.utils.data import RandomSampler, SequentialSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
 
-from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
-from recipe.simpletir.utils.rl_dataset.rl_dataset import RLCustomPromptDataset
+from recipe.math_agent.agent_utils import AgentHelper, GenerationConfig
+from recipe.math_agent.utils.rl_dataset.rl_dataset import RLCustomPromptDataset
 from verl import DataProto
 from verl.protocol import DataProtoItem, pad_dataproto_to_divisor, unpad_dataproto
 from verl.single_controller.base import Worker
@@ -51,7 +51,7 @@ from verl.trainer.ppo.ray_trainer import (
     # compute_advantage,
     compute_response_mask,
 )
-from recipe.simpletir.agent_utils import AgentHelper, GenerationConfig
+from recipe.math_agent.agent_utils import AgentHelper, GenerationConfig
 from verl.utils.dataset.rl_dataset import collate_fn
 from verl.utils.tracking import ValidationGenerationsLogger
 from enum import Enum
@@ -448,7 +448,7 @@ def _timer(name: str, timing_raw: Dict[str, float]):
     timing_raw[name] = timer.last
 
 
-class RaySimpleTIRTrainer(RayPPOTrainer):
+class RayMathAgentTrainer(RayPPOTrainer):
     """
     Note that this trainer runs on the driver process on a single CPU/GPU node.
     """
@@ -555,11 +555,17 @@ class RaySimpleTIRTrainer(RayPPOTrainer):
         if adv_estimator == AdvantageEstimator.DRGRPO:
             with open_dict(self.config):
                 # Set loss aggregation mode to sum tokens instead of averaging them
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "drgrpo"
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
                     self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
+                    print(f"Set loss_agg_mode to seq-mean-token-sum for DRGRPO")
                 # Also set for entropy loss if it exists
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
                     self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
+
+                if hasattr(self.config.actor_rollout_ref.actor, "max_response_len_per_turn"):
+                    self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
+                    print(f"Set max_response_len_per_turn to {self.config.data.max_response_length} for DRGRPO")
 
         # Force rejection_sampling=True and oversample_multiplier=2 for DAPO
         if adv_estimator == AdvantageEstimator.DAPO:

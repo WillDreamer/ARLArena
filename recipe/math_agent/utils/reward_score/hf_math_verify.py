@@ -19,7 +19,7 @@ from math_verify import parse
 from math_verify.grader import sympy_expr_eq
 from sympy import Basic, MatrixBase
 
-from recipe.simpletir.utils.reward_score.qwen_math_eval_toolkit.parser import (
+from recipe.math_agent.utils.reward_score.qwen_math_eval_toolkit.parser import (
     extract_answer as qwen_extract_answer,
 )
 

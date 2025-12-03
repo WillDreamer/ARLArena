@@ -10,7 +10,7 @@ if os.getenv("SANDBOX_ENDPOINT", None) is not None:
 else:
     from sandbox.internal_sandbox import parallel_sandbox
 
-from recipe.simpletir.agent_utils import truncate_content
+from recipe.math_agent.agent_utils import truncate_content
 
 MAX_CHAR_DISPLAY = 2048
 

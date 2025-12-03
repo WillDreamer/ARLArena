@@ -20,7 +20,7 @@ import os
 import hydra
 import ray
 
-from recipe.simpletir.simpletir_ray_trainer import RaySimpleTIRTrainer
+from recipe.math_agent.ray_trainer import RayMathAgentTrainer
 
 
 def get_custom_reward_fn(config):
@@ -54,12 +54,12 @@ def get_custom_reward_fn(config):
     return getattr(module, function_name)
 
 
-@hydra.main(config_path="config", config_name="simpletir_trainer", version_base=None)
+@hydra.main(config_path="config", config_name="math_agent_trainer", version_base=None)
 def main(config):
-    run_simpletir(config)
+    run_math_agent(config)
 
 
-def run_simpletir(config) -> None:
+def run_math_agent(config) -> None:
     # TODO(linjunrong.ocss884): this ENV is left for resolving SGLang conflict with ray devices
     # isolation, will solve in the future
     os.environ["ENSURE_CUDA_VISIBLE_DEVICES"] = os.environ.get(
@@ -175,19 +175,19 @@ class TaskRunner:
                 config.reward_model.reward_manager = 'dapo'
         reward_manager_name = config.reward_model.get("reward_manager", "naive")
         if reward_manager_name == "math":
-            from recipe.simpletir.workers.reward_manager import MathRewardManager
+            from recipe.math_agent.workers.reward_manager import MathRewardManager
 
             reward_manager_cls = MathRewardManager
         elif reward_manager_name == "math_exec":
-            from recipe.simpletir.workers.reward_manager import MathRewardExecManager
+            from recipe.math_agent.workers.reward_manager import MathRewardExecManager
 
             reward_manager_cls = MathRewardExecManager
         elif reward_manager_name == "code":
-            from recipe.simpletir.workers.reward_manager import CodeRewardManager
+            from recipe.math_agent.workers.reward_manager import CodeRewardManager
 
             reward_manager_cls = CodeRewardManager
         elif reward_manager_name == "dapo":
-            from recipe.simpletir.workers.reward_manager.math_verify_dapo import DapoRewardManager
+            from recipe.math_agent.workers.reward_manager.math_verify_dapo import DapoRewardManager
 
             reward_manager_cls = DapoRewardManager
         else:
@@ -225,7 +225,7 @@ class TaskRunner:
             resource_pool_spec=resource_pool_spec, mapping=mapping
         )
 
-        trainer = RaySimpleTIRTrainer(
+        trainer = RayMathAgentTrainer(
             config=config,
             tokenizer=tokenizer,
             processor=processor,
