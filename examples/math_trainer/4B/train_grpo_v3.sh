@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -14,6 +14,7 @@ source /data1/xw27/miniconda3/etc/profile.d/conda.sh
 cd /home/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
+ADV_ESTIMATOR=grpo
 MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
@@ -30,14 +31,14 @@ PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=2
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
-ACTOR_OPTIMIZER_OFFLOAD=True
-ACTOR_PARAMETER_OFFLOAD=True
+ACTOR_OPTIMIZER_OFFLOAD=False
+ACTOR_PARAMETER_OFFLOAD=False
 MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=False #mask for now
+REMOVE_CLIP=True #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
 REJECTION_SAMPLE=False
 SP_SIZE=1
@@ -48,7 +49,7 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=1
+OVERSAMPLE=2
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
@@ -59,11 +60,12 @@ RESUME=False
 PROJECT_NAME=simpletir_math
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_noover
+RUN_NAME=math_p8000_r8000_n4_4B_sample_grpo_data_dir
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
 ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -222,8 +224,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1380
-DASHBOARD_PORT=1381
+PORT=1336
+DASHBOARD_PORT=1337
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -309,7 +311,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=$ADV_ESTIMATOR \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \

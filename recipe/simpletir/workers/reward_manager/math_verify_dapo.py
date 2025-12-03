@@ -56,16 +56,18 @@ def reward_func_timeout_ray(
         signal.signal(signal.SIGALRM, old_handler)
 
 
-class MathRewardManager:
+class DapoRewardManager:
     """
     The Reward Manager is borrowed from https://github.com/PRIME-RL/PRIME
     """
 
-    def __init__(self, tokenizer, num_examine, compute_score=None) -> None:
+    def __init__(self, tokenizer, num_examine, compute_score=None, overlong_buffer_cfg_len=None, max_resp_len=8000) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or _default_compute_score
         self.timeout_seconds = 5
+        self.overlong_buffer_cfg_len = overlong_buffer_cfg_len if overlong_buffer_cfg_len is not None else int(max_resp_len/5)
+        self.max_resp_len = max_resp_len
 
     def math_compute_score_parallel_with_ray(
         self, data_sources, solution_strs, ground_truths, extra_infos
@@ -186,19 +188,37 @@ class MathRewardManager:
         valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(
             dim=-1
         )
-        data_sources = data.non_tensor_batch["data_source"]
+
+        # Calculate overlong reward for each item
+        overlong_buffer_len = self.overlong_buffer_cfg_len
+        expected_len = self.max_resp_len - overlong_buffer_len
+        overlong_penalty_factor = 1
 
         for i in range(len(data)):
             data_source = data_sources[i]
-            reward_tensor[i, valid_response_length[i].item() - 1] = scores[i]
+            valid_resp_len = valid_response_length[i].item()
+            
+            # Calculate overlong reward
+            exceed_len = valid_resp_len - expected_len
+            overlong_reward = min(-exceed_len / overlong_buffer_len * overlong_penalty_factor, 0)
+            
+            # Add overlong reward to score
+            scores[i] += overlong_reward
+            
+            # Add to extra_info_dict
+            if "overlong_reward" not in extra_info_dict:
+                extra_info_dict["overlong_reward"] = [0.0] * len(scores)
+            if "overlong" not in extra_info_dict:
+                extra_info_dict["overlong"] = [0.0] * len(scores)
+            extra_info_dict["overlong_reward"][i] = overlong_reward
+            extra_info_dict["overlong"][i] = 1.0 if overlong_reward < 0 else 0.0
+            
+            reward_tensor[i, valid_resp_len - 1] = scores[i]
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
 
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
-
-            if already_print_data_sources[data_source] < self.num_examine:
-                already_print_data_sources[data_source] += 1
-
+        
         return {"reward_tensor": reward_tensor, "extra_info": extra_info_dict}

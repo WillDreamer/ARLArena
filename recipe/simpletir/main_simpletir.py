@@ -87,7 +87,7 @@ class TaskRunner:
         # print initial config
         from pprint import pprint
 
-        from omegaconf import OmegaConf
+        from omegaconf import OmegaConf, open_dict
 
         from verl.utils.fs import copy_to_local
 
@@ -170,6 +170,9 @@ class TaskRunner:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = global_pool_id
 
+        if config.algorithm.adv_estimator == 'dapo':
+            with open_dict(config):
+                config.reward_model.reward_manager = 'dapo'
         reward_manager_name = config.reward_model.get("reward_manager", "naive")
         if reward_manager_name == "math":
             from recipe.simpletir.workers.reward_manager import MathRewardManager
@@ -183,18 +186,40 @@ class TaskRunner:
             from recipe.simpletir.workers.reward_manager import CodeRewardManager
 
             reward_manager_cls = CodeRewardManager
+        elif reward_manager_name == "dapo":
+            from recipe.simpletir.workers.reward_manager.math_verify_dapo import DapoRewardManager
+
+            reward_manager_cls = DapoRewardManager
         else:
             raise NotImplementedError
 
         compute_score = get_custom_reward_fn(config)
-        reward_fn = reward_manager_cls(
-            tokenizer=tokenizer, num_examine=0, compute_score=compute_score
-        )
+        if reward_manager_name == "dapo":
+            max_resp_len = config.data.get("max_response_length", 8000)
+            reward_fn = reward_manager_cls(
+                tokenizer=tokenizer, 
+                num_examine=0, 
+                compute_score=compute_score,
+                overlong_buffer_cfg_len=None,
+                max_resp_len=max_resp_len
+            )
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(
+                tokenizer=tokenizer, 
+                num_examine=1, 
+                compute_score=compute_score,
+                overlong_buffer_cfg_len=None,
+                max_resp_len=max_resp_len
+            )
+        else:
+            reward_fn = reward_manager_cls(
+                tokenizer=tokenizer, num_examine=0, compute_score=compute_score
+            )
 
-        # Note that we always use function-based RM for validation
-        val_reward_fn = reward_manager_cls(
-            tokenizer=tokenizer, num_examine=1, compute_score=compute_score
-        )
+            # Note that we always use function-based RM for validation
+            val_reward_fn = reward_manager_cls(
+                tokenizer=tokenizer, num_examine=1, compute_score=compute_score
+            )
 
         resource_pool_manager = ResourcePoolManager(
             resource_pool_spec=resource_pool_spec, mapping=mapping
