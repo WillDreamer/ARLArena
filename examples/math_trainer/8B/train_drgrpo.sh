@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -10,10 +10,12 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
+#* change
 source /data1/xw27/miniconda3/etc/profile.d/conda.sh
 cd /home/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
+ADV_ESTIMATOR=drgrpo
 MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
@@ -21,23 +23,23 @@ N_VAL=4
 ROLLOUT_N=4
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8000
-MAX_RESPONSE_LENGTH=8000
+VAL_BEFORE_TRAIN=True
+MAX_PROMPT_LENGTH=16384
+MAX_RESPONSE_LENGTH=16384
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=2
+TOTAL_EPOCHS=1
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
-ACTOR_OPTIMIZER_OFFLOAD=False
-ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-4B
+ACTOR_OPTIMIZER_OFFLOAD=True
+ACTOR_PARAMETER_OFFLOAD=True
+MODEL_NAME=Qwen/Qwen3-8B
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=True #mask for now
+REMOVE_CLIP=False #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
 REJECTION_SAMPLE=False
 SP_SIZE=1
@@ -48,22 +50,21 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=2
+OVERSAMPLE=1
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
-CONFIG_NAME=simpletir_trainer
+CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
-PROJECT_NAME=simpletir_math
+PROJECT_NAME=math_trainer
 
-LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_data_dir
-LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
+BASE_RUN_NAME=math_p16384_r16384_n4_${MODEL_NAME}_sample_${ADV_ESTIMATOR}
+# LOG_FILE_PATH=/local/xw27/ARLArena/log_$RUN_NAME.log
+# CHECKPOINT_PATH=/local/xw27/ARLArena/checkpoints_$RUN_NAME
+# ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
 
-CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
-ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -222,16 +223,11 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1336
-DASHBOARD_PORT=1337
+# PORT=1336
+# DASHBOARD_PORT=1337
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
-RUN_NAME+="_$MODEL_NAME"
 
-
-
-echo "RUN_NAME: $RUN_NAME"
-echo "LOG_FILE_PATH: $LOG_FILE_PATH"
 echo "Training with the following parameters:"
 echo "Train Batch Size: $TRAIN_BATCH_SIZE"
 echo "Rollout N: $ROLLOUT_N"
@@ -294,74 +290,90 @@ echo "CONFIG_NAME: $CONFIG_NAME"
 # ======================== wandb ========================
 export SANDBOX_ENDPOINT=http://127.0.0.1:12345/faas/sandbox/
 # export WANDB_ENTITY="RL_Reasoning"
-export WANDB_PROMPT_VERSION="simpletir"
+export WANDB_PROMPT_VERSION="math_trainer"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
 WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 # Login to WandB (if API key is provided)
-# if [ "$WANDB_API_KEY" != "" ]; then
-#     wandb login --relogin $WANDB_API_KEY
-#     mkdir -p wandb/${project_name}/${experiment_name}
-#     SAVE_PATH=wandb/${project_name}/${experiment_name}
-#     export WANDB_DIR=${SAVE_PATH}
-# fi
+if [ "$WANDB_API_KEY" != "" ]; then
+    wandb login --relogin $WANDB_API_KEY
+    mkdir -p wandb/${PROJECT_NAME}/${RUN_NAME}
+    SAVE_PATH=wandb/${PROJECT_NAME}/${RUN_NAME}
+    export WANDB_DIR=${SAVE_PATH}
+fi
 
 
+for seed in 0 42
+do
+    SEED=$seed
+    RUN_NAME="Seed${seed}_${BASE_RUN_NAME}"
+    LOG_FILE_PATH=/local/xw27/ARLArena/log_$RUN_NAME.log
+    CHECKPOINT_PATH=/local/xw27/ARLArena/checkpoints_$RUN_NAME
+    ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+    mkdir -p $CHECKPOINT_PATH
+    mkdir -p $ROLLOUT_DATA_DIR
 
-PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
-    --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
-    data.train_files=$TRAIN_FILES \
-    data.val_files=$VALID_FILES \
-    data.train_batch_size=$TRAIN_BATCH_SIZE \
-    data.val_sample_size=$VAL_SAMPLE_SIZE \
-    data.max_prompt_length=$MAX_PROMPT_LENGTH \
-    data.max_response_length=$MAX_RESPONSE_LENGTH \
-    actor_rollout_ref.model.path=$MODEL_NAME \
-    actor_rollout_ref.actor.optim.lr=$ACTOR_LR \
-    actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$PPO_MICRO_TOKEN \
-    actor_rollout_ref.actor.grad_clip=$GRAD_CLIP \
-    actor_rollout_ref.actor.fsdp_config.param_offload=$ACTOR_PARAMETER_OFFLOAD \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=$ACTOR_OPTIMIZER_OFFLOAD \
-    actor_rollout_ref.actor.ulysses_sequence_parallel_size=$SP_SIZE \
-    actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.actor.kl_loss_update=False \
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=$ROLLOUT_GPU_MEMORY_UTIL \
-    actor_rollout_ref.rollout.n=$ROLLOUT_N \
-    actor_rollout_ref.rollout.temperature=$ROLLOUT_TEMPERATURE \
-    actor_rollout_ref.rollout.val_kwargs.n=$N_VAL \
-    actor_rollout_ref.rollout.val_kwargs.temperature=$VAL_TEMPERATURE \
-    actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
-    actor_rollout_ref.ref.ulysses_sequence_parallel_size=$SP_SIZE\
-    trainer.rejection_sample=$REJECTION_SAMPLE \
-    trainer.acc_filter=$ACC_FILTER \
-    trainer.acc_filter_low=$ACC_FILTER_LOW \
-    trainer.acc_filter_high=$ACC_FILTER_HIGH \
-    trainer.start_clip_step=$START_CLIP_STEP \
-    trainer.project_name=$PROJECT_NAME \
-    trainer.experiment_name=$RUN_NAME \
-    trainer.n_gpus_per_node=$GPUS_PER_NODE \
-    trainer.nnodes=$NNODES \
-    trainer.remove_clip=$REMOVE_CLIP \
-    trainer.oversample_multiplier=$OVERSAMPLE \
-    trainer.log_val_generations=$LOG_VAL_GENERATIONS \
-    trainer.save_freq=$SAVE_FREQ \
-    trainer.test_freq=$TEST_FREQ \
-    trainer.val_before_train=$VAL_BEFORE_TRAIN \
-    trainer.default_local_dir=$CHECKPOINT_PATH/$RUN_NAME \
-    trainer.total_epochs=$TOTAL_EPOCHS \
-    trainer.resume_mode=$RESUME_MODE \
-    trainer.resume_from_path=$RESUME_FROM_PATH \
-    trainer.balance_batch=$BALANCE_BATCH \
-    agent.tool_use=$TOOL_USE \
-    agent.max_turns=$MAX_TURNS \
-    data.max_start_length=4096 \
-    data.max_obs_length=$MAX_OBS_LENGTH \
-    trainer.val_only=$VAL_ONLY \
-    +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
-    +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
-    trainer.max_actor_ckpt_to_keep=2 \
-    | tee -a $LOG_FILE_PATH
+    echo "RUN_NAME: $RUN_NAME"
+    echo "LOG_FILE_PATH: $LOG_FILE_PATH"
+    echo "Seed: $SEED"
+
+    PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
+        --config-name $CONFIG_NAME \
+        algorithm.adv_estimator=$ADV_ESTIMATOR \
+        data.train_files=$TRAIN_FILES \
+        data.val_files=$VALID_FILES \
+        data.train_batch_size=$TRAIN_BATCH_SIZE \
+        data.val_sample_size=$VAL_SAMPLE_SIZE \
+        data.max_prompt_length=$MAX_PROMPT_LENGTH \
+        data.max_response_length=$MAX_RESPONSE_LENGTH \
+        data.shuffle=True \
+        data.seed=$SEED \
+        actor_rollout_ref.model.path=$MODEL_NAME \
+        actor_rollout_ref.actor.optim.lr=$ACTOR_LR \
+        actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE \
+        actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$PPO_MICRO_TOKEN \
+        actor_rollout_ref.actor.grad_clip=$GRAD_CLIP \
+        actor_rollout_ref.actor.fsdp_config.param_offload=$ACTOR_PARAMETER_OFFLOAD \
+        actor_rollout_ref.actor.fsdp_config.optimizer_offload=$ACTOR_OPTIMIZER_OFFLOAD \
+        actor_rollout_ref.actor.ulysses_sequence_parallel_size=$SP_SIZE \
+        actor_rollout_ref.actor.use_kl_loss=True \
+        actor_rollout_ref.actor.kl_loss_update=False \
+        actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
+        actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE \
+        actor_rollout_ref.rollout.gpu_memory_utilization=$ROLLOUT_GPU_MEMORY_UTIL \
+        actor_rollout_ref.rollout.n=$ROLLOUT_N \
+        actor_rollout_ref.rollout.temperature=$ROLLOUT_TEMPERATURE \
+        actor_rollout_ref.rollout.val_kwargs.n=$N_VAL \
+        actor_rollout_ref.rollout.val_kwargs.temperature=$VAL_TEMPERATURE \
+        actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
+        actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
+        actor_rollout_ref.ref.ulysses_sequence_parallel_size=$SP_SIZE\
+        trainer.rejection_sample=$REJECTION_SAMPLE \
+        trainer.acc_filter=$ACC_FILTER \
+        trainer.acc_filter_low=$ACC_FILTER_LOW \
+        trainer.acc_filter_high=$ACC_FILTER_HIGH \
+        trainer.start_clip_step=$START_CLIP_STEP \
+        trainer.project_name=$PROJECT_NAME \
+        trainer.experiment_name=$RUN_NAME \
+        trainer.n_gpus_per_node=$GPUS_PER_NODE \
+        trainer.nnodes=$NNODES \
+        trainer.remove_clip=$REMOVE_CLIP \
+        trainer.oversample_multiplier=$OVERSAMPLE \
+        trainer.log_val_generations=$LOG_VAL_GENERATIONS \
+        trainer.save_freq=$SAVE_FREQ \
+        trainer.test_freq=$TEST_FREQ \
+        trainer.val_before_train=$VAL_BEFORE_TRAIN \
+        trainer.default_local_dir=$CHECKPOINT_PATH/$RUN_NAME \
+        trainer.total_epochs=$TOTAL_EPOCHS \
+        trainer.resume_mode=$RESUME_MODE \
+        trainer.resume_from_path=$RESUME_FROM_PATH \
+        trainer.balance_batch=$BALANCE_BATCH \
+        agent.tool_use=$TOOL_USE \
+        agent.max_turns=$MAX_TURNS \
+        data.max_start_length=4096 \
+        data.max_obs_length=$MAX_OBS_LENGTH \
+        trainer.val_only=$VAL_ONLY \
+        +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
+        +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
+        trainer.max_actor_ckpt_to_keep=2 \
+        | tee -a $LOG_FILE_PATH
+done

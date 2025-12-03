@@ -19,7 +19,7 @@ import ray
 import torch
 from ray.exceptions import GetTimeoutError
 
-from recipe.simpletir.utils.reward_score import _default_compute_score
+from recipe.math_agent.utils.reward_score import _default_compute_score
 from verl import DataProto
 
 
