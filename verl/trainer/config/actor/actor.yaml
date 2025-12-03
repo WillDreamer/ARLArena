@@ -28,6 +28,7 @@ use_dynamic_bsz: false
 # Typically it should be: n * ${data.max_prompt_length} + ${data.max_response_length}
 # oc.select: the default val for ref.log_prob_max_token_len_per_gpu
 ppo_max_token_len_per_gpu: 16384
+max_response_len_per_turn: 500
 
 # PPO clip ratio
 clip_ratio: 0.2
