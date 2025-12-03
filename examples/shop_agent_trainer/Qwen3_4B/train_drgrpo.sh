@@ -98,8 +98,6 @@ do
         invalid_action_penalty_coef=0.1 \
         algorithm.use_kl_in_reward=False \
         algorithm.gamma=0.95 \
-        algorithm.gigpo.step_advantage_w=1.0 \
-        algorithm.gigpo.mode=$mode \
         env.env_name=Webshop \
         env.seed=$seed \
         env.max_steps=15 \
