@@ -995,6 +995,7 @@ def compute_policy_loss_drgrpo(
         pg_losses = pg_losses * tis_imp_ratio
 
     pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+    pg_loss /= config.max_response_len_per_turn
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 

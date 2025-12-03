@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -32,7 +32,7 @@ MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
-#* gigpo✅, aepo✅, gspo, sapo, dgrpo✅, vanilla_grpo, dapo, empg, cispo
+#* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
 estimator="drgrpo" 
 project_name="ARLArena_webshop"
 max_response_length=500
@@ -78,7 +78,7 @@ do
         actor_rollout_ref.actor.use_kl_loss=True \
         actor_rollout_ref.actor.kl_loss_update=False \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
-        +actor_rollout_ref.actor.max_response_len=${max_response_length} \
+        actor_rollout_ref.actor.max_response_len_per_turn=${max_response_length} \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=True \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
