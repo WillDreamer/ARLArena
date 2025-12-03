@@ -21,7 +21,7 @@ implement PPO
 
 import numpy as np
 import torch
-
+import re
 import verl.utils.torch_functional as verl_F
 
 from collections import defaultdict, Counter
@@ -557,63 +557,55 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
         zeta (float): Hyperparameter for the future clarity bonus.
     """
 
-    # --- 1. First Pass: Collect Step-Level Entropies ---
-    all_step_entropies = []
-    # segments_to_modify stores {'sample_idx', 'start', 'end'} for each step
-    segments_to_modify = [] 
-
-    for i in range(batch.batch.batch_size[0]):
-        # Find "assistant" segments, which correspond to agent steps.
-        token_segments = process_token_sequences(
-            batch.batch['responses'][i], 
-            [151644, 77091, 198], 
-            [151645]
-        )
-        for start, end in token_segments:
-            if start >= end: continue
-            
-            # Calculate the average token-level entropy for the step
-            step_entropy = batch.batch['old_entropy'][i][start:end].mean().item()
-            all_step_entropies.append(step_entropy)
-            segments_to_modify.append({'sample_idx': i, 'start': start, 'end': end})
-
+    breakpoint()
     # --- 1. Calculate Modulated Advantage Components ---
     H = np.array(batch.batch['old_entropy'])
-    
     # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
     min_H, max_H = np.min(H), np.max(H)
     H_norm = (H - min_H) / (max_H - min_H + 1e-8)
-
     # Self-calibrating gradient scaling g(H) (Eq. 10)
     g_H_unnormalized = np.exp(-k * H_norm)
     mean_g_H = np.mean(g_H_unnormalized)
     g_H = g_H_unnormalized / (mean_g_H + 1e-8)
-    
     # Future clarity bonus f(H) (Eq. 11)
     f_H = np.exp(-k_f * H_norm)
-
     # Convert to tensors for PyTorch operations
     g_H = torch.tensor(g_H, device=batch.batch['advantages'].device, dtype=torch.float32)
     f_H = torch.tensor(f_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+    batch.batch['f_entropy'] = f_H
 
-    # --- 2. Second Pass: Apply Advantage Modulation (Eq. 8) ---
-    step_advantages = []
-    for i, segment in enumerate(segments_to_modify):
-        idx, start, end = segment['sample_idx'], segment['start'], segment['end']
+    # --- 2. Group into trajectories ---
+    
+    steps2traj_f_H = defaultdict(list)  # key: (idx, traj), value: list of step-score tensors
+    with torch.no_grad():
+        bsz = batch.batch.batch_size[0]
+        for i in range(bsz):
+            raw_prompt = batch.non_tensor_batch['raw_prompt'][i][0]['content']
+            m = re.search(r'you have already taken (\d+) step\(s\)', raw_prompt)
+            if m:
+                turn_idx = int(m.group(1))
+            else:
+                turn_idx = 0
+            key = (batch.non_tensor_batch['traj_uid'][i], turn_idx)
+            steps2traj_f_H[key].append(batch.batch['f_entropy'][i])
+
+    # --- 3. Second Pass: Apply Advantage Modulation (Eq. 8) ---
+    for i in range(batch.batch.batch_size[0]):
         
         # Apply self-calibrating gradient scaling
-        batch.batch['advantages'] *= g_H[i]
+        batch.batch['advantages'][i] *= g_H[i]
+
+        m = re.search(r'you have already taken (\d+) step\(s\)', raw_prompt)
+        if m:
+            turn_idx = int(m.group(1))
+        else:
+            turn_idx = 0
         
-        # Add future clarity bonus if there is a next step
-        next_seg = segments_to_modify[i+1] if i+1 < len(segments_to_modify) else None
-        if next_seg and next_seg['sample_idx'] == idx:
-            batch.batch['advantages'][idx][start:end] += zeta * f_H[i+1]
-        step_advantages.append(batch.batch['advantages'][idx][start])
-            
-    # --- 3. Final Advantage Normalization (Eq. 7) ---
-    if step_advantages:
-        final_adv_mean = torch.mean(torch.stack(step_advantages))
-        batch.batch['advantages'] -= final_adv_mean
+        if turn_idx+1 < len(steps2traj_f_H[key]):
+            f_H_key = (batch.non_tensor_batch['traj_uid'][i], turn_idx+1)
+            batch.batch['advantages'] += zeta * steps2traj_f_H[f_H_key]
+        
+        batch.batch['advantages'] -= torch.mean(batch.batch['advantages'])
 
     return batch.batch['advantages'], batch.batch['advantages']
 
