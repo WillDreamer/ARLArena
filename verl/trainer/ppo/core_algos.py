@@ -1464,7 +1464,6 @@ def compute_policy_loss_sapo(
                           - clip_ratio, clip_ratio_low, clip_ratio_high (for logging only)
                           - sapo_tau_pos (default 1.0)
                           - sapo_tau_neg (default 2.0, should be > sapo_tau_pos)
-                          - sapo_epsilon (default 1e-8)
         rollout_log_probs: optional behavior-policy log-probs (for TIS, not part of the original SAPO paper)
     """
 
@@ -1477,8 +1476,7 @@ def compute_policy_loss_sapo(
 
     # --- SAPO hyperparameters: τ_neg > τ_pos for faster decay on negative sequences (Sec. 3) ---
     tau_pos = getattr(config, "sapo_tau_pos", 1.0)
-    tau_neg = getattr(config, "sapo_tau_neg", 1.04)
-    eps = getattr(config, "sapo_epsilon", 1e-8)
+    tau_neg = getattr(config, "sapo_tau_neg", 1.05)
 
     # --- Token-level importance ratios r_i,t(θ) (Eq. (2)) ---
     negative_approx_kl = log_prob - old_log_prob          # log r_i,t
@@ -1505,7 +1503,7 @@ def compute_policy_loss_sapo(
     # --- SAPO gate: f_i,t(r) = (4 / τ_i) * σ(τ_i (r - 1))  (Eq. (6)/(12)) ---
     delta = ratio - 1.0
     p = torch.sigmoid(tau * delta)                                      # σ(τ_i (r_i,t - 1))
-    gate = 4.0 * p / (tau + eps)                                        # f_i,t(r_i,t)
+    gate = 4.0 * p / tau                                                # f_i,t(r_i,t)
 
     # --- Surrogate per-token loss: -f_i,t(r_i,t) * A_i,t^b  (Eq. (5)/(10)) ---
     pg_losses = -gate * advantages                                      # (B, T)

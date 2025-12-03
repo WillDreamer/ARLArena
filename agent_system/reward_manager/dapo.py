@@ -25,7 +25,7 @@ class DAPORewardManager:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.normalize_by_length = normalize_by_length
-        self.overlong_buffer_cfg_len = overlong_buffer_cfg_len
+        self.overlong_buffer_cfg_len = int(overlong_max_resp_len/5)
         self.overlong_max_resp_len = overlong_max_resp_len
         
     def __call__(self, data: DataProto, return_dict=False):
