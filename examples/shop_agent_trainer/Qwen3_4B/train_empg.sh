@@ -31,7 +31,7 @@ mode="mean_norm" # "mean_norm" or "mean_std_norm"
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
-#* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
+#* estimator: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
 estimator="empg" 
 project_name="ARLArena_webshop"

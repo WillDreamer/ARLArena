@@ -233,6 +233,7 @@ class FSDPActorConfig(ActorConfig):
     use_remove_padding: bool = False
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     micro_batch_size_per_gpu: int = 2
+    max_response_len_per_turn: int = 500
 
     def __post_init__(self):
         """Validate FSDP actor configuration parameters."""
