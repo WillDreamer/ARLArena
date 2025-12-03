@@ -557,7 +557,6 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
         zeta (float): Hyperparameter for the future clarity bonus.
     """
 
-    breakpoint()
     # --- 1. Calculate Modulated Advantage Components ---
     H = np.array(batch.batch['old_entropy'])
     # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
