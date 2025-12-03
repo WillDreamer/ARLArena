@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -31,9 +31,9 @@ mode="mean_norm" # "mean_norm" or "mean_std_norm"
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
-#* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
+#* estimator: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
-estimator="gspo" 
+estimator="cispo" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
@@ -102,7 +102,7 @@ do
         env.max_steps=15 \
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-        trainer.rollout_data_dir=./outputs/${experiment_name} \
+        trainer.rollout_data_dir=outputs/${experiment_name} \
         trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
