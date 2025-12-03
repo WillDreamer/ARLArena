@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,7 +20,7 @@ mkdir -p "$RAY_TMPDIR"
 
 ROLLOUT_MODE="sync"
 PORT=$(( ( RANDOM % 10000 +1000) ))
-ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7778 --include-dashboard=true
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
 
 num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 train_data_size=16
@@ -32,8 +32,8 @@ MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
-#* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
-estimator="dapo" 
+#* gigpo✅, aepo✅, gspo, sapo, dgrpo✅, vanilla_grpo, dapo, empg, cispo
+estimator="empg" 
 project_name="ARLArena_webshop"
 max_response_length=500
 
@@ -85,7 +85,7 @@ do
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=True \
         actor_rollout_ref.rollout.free_cache_engine=False \

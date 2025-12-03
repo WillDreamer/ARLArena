@@ -53,7 +53,7 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2)) # evaluate 2 × val_data_size tasks during each iteration
 
-for seed in 0
+for seed in 0 42
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -114,7 +114,8 @@ do
         trainer.save_freq=10 \
         trainer.test_freq=10 \
         trainer.total_epochs=150 \
-        trainer.val_before_train=False $@
+        trainer.max_actor_ckpt_to_keep=2 \
+        trainer.val_before_train=False $@ | tee -a ${experiment_name}.log
 done
 
 # algorithm.filter_groups.enable=True \

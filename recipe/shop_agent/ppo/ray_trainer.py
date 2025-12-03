@@ -138,7 +138,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO):
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO, AdvantageEstimator.DAPO):
         # TODO: test on more adv estimator type
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
@@ -185,22 +185,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             index=data.non_tensor_batch["uid"],
             traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=False, # For DGRPO, we hard code that we do not normalize by std
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.DAPO:
-        grpo_calculation_mask = data.batch["response_mask"]
-        if multi_turn:
-            # If multi-turn, replace the mask with the relevant part of loss_mask
-            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
-            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
-        # Call compute_grpo_outcome_advantage with parameters matching its definition
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
@@ -382,6 +366,7 @@ class ShopAgentTrainer(RayPPOTrainer):
         # Automatically set loss_agg_mode to "seq-mean-token-sum" for DRGRPO to avoid token averaging
         if self.config.algorithm.adv_estimator == AdvantageEstimator.DRGRPO:
             with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "drgrpo"
                 # Set loss aggregation mode to sum tokens instead of averaging them
                 if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
                     self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
