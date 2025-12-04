@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -19,27 +19,27 @@ TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=4
-ROLLOUT_TEMPERATURE=1.0
+ROLLOUT_TEMPERATURE=0.7
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8000
-MAX_RESPONSE_LENGTH=8000
+MAX_PROMPT_LENGTH=16384
+MAX_RESPONSE_LENGTH=16384
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=2
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
-ROLLOUT_GPU_MEMORY_UTIL=0.4
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
+ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
 MODEL_NAME=Qwen/Qwen3-4B
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=False #mask for now
+REMOVE_CLIP=True #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
-REJECTION_SAMPLE=False
+REJECTION_SAMPLE=True
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -48,18 +48,18 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=1
+OVERSAMPLE=2
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
-CONFIG_NAME=simpletir_trainer
+CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
-PROJECT_NAME=simpletir_math
+PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_noover
+RUN_NAME=math_p16384_r16384_n4_4B_sample_grpo_dynamic_removeclip_temp0.7
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -294,7 +294,7 @@ echo "CONFIG_NAME: $CONFIG_NAME"
 # ======================== wandb ========================
 export SANDBOX_ENDPOINT=http://127.0.0.1:12345/faas/sandbox/
 # export WANDB_ENTITY="RL_Reasoning"
-export WANDB_PROMPT_VERSION="simpletir"
+export WANDB_PROMPT_VERSION="math_agent"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
 WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 # Login to WandB (if API key is provided)
@@ -307,7 +307,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 
 
-PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
+PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
     algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \

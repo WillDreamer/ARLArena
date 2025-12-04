@@ -11,8 +11,8 @@ NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
 #* change
-source /data1/xw27/miniconda3/etc/profile.d/conda.sh
-cd /home/xw27/agent/ARLArena
+# source /data1/xw27/miniconda3/etc/profile.d/conda.sh
+# cd /home/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 ADV_ESTIMATOR=grpo
@@ -28,11 +28,11 @@ MAX_PROMPT_LENGTH=16384
 MAX_RESPONSE_LENGTH=16384
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
+PPO_MICRO_TOKEN=24000 #change to 20000/16000
 TOTAL_EPOCHS=1
-TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
+TRAIN_DATASET=("./datasets/simplelr_math_35/train" "./datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
+VALID_DATASET=("./datasets/simplelr_math_35/test" "./datasets/deepscaler/test" "./datasets/deepscaler/aime" "./datasets/deepscaler/aime25" "./datasets/deepscaler/olympiad" "./datasets/deepscaler/math" "./datasets/deepscaler/amc" "./datasets/deepscaler/minerva")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
 ACTOR_OPTIMIZER_OFFLOAD=True
 ACTOR_PARAMETER_OFFLOAD=True
@@ -61,9 +61,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 BASE_RUN_NAME=math_p16384_r16384_n4_${MODEL_NAME}_sample_${ADV_ESTIMATOR}
-# LOG_FILE_PATH=/local/xw27/ARLArena/log_$RUN_NAME.log
-# CHECKPOINT_PATH=/local/xw27/ARLArena/checkpoints_$RUN_NAME
-# ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+
 
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
@@ -306,9 +304,9 @@ for seed in 0 42
 do
     SEED=$seed
     RUN_NAME="Seed${seed}_${BASE_RUN_NAME}"
-    LOG_FILE_PATH=/local/xw27/ARLArena/log_$RUN_NAME.log
-    CHECKPOINT_PATH=/local/xw27/ARLArena/checkpoints_$RUN_NAME
-    ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
+    LOG_FILE_PATH=./log_$RUN_NAME.log
+    CHECKPOINT_PATH=./checkpoints_$RUN_NAME
+    ROLLOUT_DATA_DIR=./rollout_data_$RUN_NAME
     mkdir -p $CHECKPOINT_PATH
     mkdir -p $ROLLOUT_DATA_DIR
 
