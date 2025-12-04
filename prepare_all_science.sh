@@ -18,17 +18,17 @@ as_root() {
 
 
 log "Run setup game environment "
-# CONDA_BASE="${CONDA_BASE:-$(conda info --base 2>/dev/null || true)}"
-# if [[ -z "${CONDA_BASE}" ]]; then
-#   for p in "$HOME/miniconda3" "$HOME/anaconda3" "/opt/anaconda3"; do
-#     [[ -d "$p" ]] && CONDA_BASE="$p" && break
-#   done
-# fi
-# if [[ -z "${CONDA_BASE}" ]]; then
-#   echo "Conda not found, please confirm it is installed (miniconda or anaconda)." >&2
-#   exit 1
-# fi
-CONDA_BASE=/data1/xw27/miniconda3
+CONDA_BASE="${CONDA_BASE:-$(conda info --base 2>/dev/null || true)}"
+if [[ -z "${CONDA_BASE}" ]]; then
+  for p in "$HOME/miniconda3" "$HOME/anaconda3" "/opt/anaconda3"; do
+    [[ -d "$p" ]] && CONDA_BASE="$p" && break
+  done
+fi
+if [[ -z "${CONDA_BASE}" ]]; then
+  echo "Conda not found, please confirm it is installed (miniconda or anaconda)." >&2
+  exit 1
+fi
+# CONDA_BASE=/data1/xw27/miniconda3
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 
@@ -36,9 +36,18 @@ conda create -n agentrl_science python==3.12 -y
 conda activate agentrl_science
 python3 -m pip install uv
 
-mkdir -p dataset/simplelr_qwen_level3to5
-wget -P dataset/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
-wget -P dataset/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
+mkdir -p datasets/simplelr_math_35
+mkdir -p datasets/deepscaler
+wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
+wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
+wget -P datasets/deepscaler/train https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/train.parquet
+wget -P datasets/deepscaler/test https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/test.parquet
+wget -P datasets/deepscaler/aime https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/aime.parquet
+wget -P datasets/deepscaler/aime25 https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/aime_2025.parquet
+wget -P datasets/deepscaler/olympiad https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/olympiad_bench.parquet
+wget -P datasets/deepscaler/math https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/math.parquet
+wget -P datasets/deepscaler/amc https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/amc.parquet
+wget -P datasets/deepscaler/minerva https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/minerva.parquet
 
 # python3 -m uv pip install -e ".[sglang]"
 python3 -m uv pip install -e ".[vllm]"
