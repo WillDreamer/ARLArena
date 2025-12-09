@@ -585,7 +585,7 @@ class MegatronPPOActor(BasePPOActor):
                 chunk.zero_grad_buffer()
 
             loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
-            calculate_entropy = self.config.entropy_coeff != 0 or loss_mode == "aepo"
+            calculate_entropy = self.config.entropy_coeff != 0 
             if data.meta_info.get("micro_batch_size", None) is not None:
                 micro_batch_size = data.meta_info["micro_batch_size"]
             else:

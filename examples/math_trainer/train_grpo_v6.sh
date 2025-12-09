@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -18,12 +18,12 @@ MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=4
-ROLLOUT_TEMPERATURE=0.7
+ROLLOUT_N=8
+ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=16384
-MAX_RESPONSE_LENGTH=16384
+MAX_PROMPT_LENGTH=8192
+MAX_RESPONSE_LENGTH=8192
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
@@ -34,7 +34,7 @@ VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home
 ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-4B
+MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=True #mask for now
@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p16384_r16384_n4_4B_sample_grpo_dynamic_removeclip_temp0.7
+RUN_NAME=math_p8192_r8192_n8_4B_Base_grpo_dynamic_removeclip_temp1.0
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME

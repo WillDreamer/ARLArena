@@ -441,7 +441,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # all return: (bsz, response_length)
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
-                    calculate_entropy = entropy_coeff != 0 or loss_mode == "aepo"
+                    calculate_entropy = entropy_coeff != 0 
 
                     #* new log prob entropy
                     entropy, log_prob = self._forward_micro_batch(
