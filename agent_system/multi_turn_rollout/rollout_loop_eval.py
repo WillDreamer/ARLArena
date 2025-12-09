@@ -327,6 +327,7 @@ class TrajectoryCollector:
 
         # Trajectory collection loop
         for _step in range(self.config.env.max_steps):
+
             active_masks = np.logical_not(is_done)
 
             batch = self.preprocess_batch(gen_batch=gen_batch, obs=obs)
@@ -419,7 +420,7 @@ class TrajectoryCollector:
             # Break if all environments are done
             if is_done.all():
                 break
-
+        
         metrics_dict = {
             'title_score': title_score,
             'r_type': r_type,

@@ -4,7 +4,14 @@ ulimit -n 131072
 export MKL_THREADING_LAYER=GNU
 unset MKL_SERVICE_FORCE_INTEL
 
-MODEL=Qwen/Qwen3-32B
+MODEL=Qwen/Qwen3-4B
+
+PORT=$(( ( RANDOM % 10000 +1000) ))
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
+
+export RAY_TMPDIR="/data2/whx/ray_out"
+rm -rf "$RAY_TMPDIR"
+mkdir -p "$RAY_TMPDIR"
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
