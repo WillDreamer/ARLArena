@@ -556,12 +556,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
             with open_dict(self.config):
                 # Set loss aggregation mode to sum tokens instead of averaging them
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "drgrpo"
-                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "loss_agg_mode"):
-                    self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
+                if hasattr(self.config.actor_rollout_ref.actor, "loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.loss_agg_mode = "seq-mean-token-sum"
                     print(f"Set loss_agg_mode to seq-mean-token-sum for DRGRPO")
-                # Also set for entropy loss if it exists
-                if hasattr(self.config.actor_rollout_ref.actor.policy_loss, "entropy_loss_agg_mode"):
-                    self.config.actor_rollout_ref.actor.policy_loss.entropy_loss_agg_mode = "seq-mean-token-sum"
 
                 if hasattr(self.config.actor_rollout_ref.actor, "max_response_len_per_turn"):
                     self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
