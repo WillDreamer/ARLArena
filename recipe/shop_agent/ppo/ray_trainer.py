@@ -1058,6 +1058,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                             log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
                             old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
                             entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+                            
 
                             if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
                                 ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]

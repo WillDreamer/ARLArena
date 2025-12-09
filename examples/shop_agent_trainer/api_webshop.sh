@@ -31,6 +31,18 @@ echo "[INFO] Batch size=${BATCH}, Max prompt len=${MAX_PROMPT_LEN}, Max resp len
 echo "[INFO] Seed=${SEED}, CPUs per env=${NUM_CPUS_PER_ENV}"
 echo "[INFO] Logs -> ${LOG_DIR}"
 
+PORT=$(( ( RANDOM % 10000 +1000) ))
+ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
+
+export RAY_TMPDIR="/data2/whx/ray_out"
+rm -rf "$RAY_TMPDIR"
+mkdir -p "$RAY_TMPDIR"
+
+python3 -m examples.data_preprocess.prepare \
+    --mode 'text' \
+    --train_data_size 256 \
+    --val_data_size 256 # evaluate 2 × val_data_size tasks during each iteration
+
 python3 -m recipe.shop_agent.eval_shop_agent_api \
   data.train_files="${TRAIN_DATA}" \
   data.val_files="${VAL_DATA}" \
