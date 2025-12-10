@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -22,19 +22,20 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+estimator="grpo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-if pgrep -f "ray" > /dev/null; then
+if pgrep -u "$USER" "ray" > /dev/null; then
     echo "==================== Detected existing Ray processes, exiting... ===================="
     echo "==================== run "ray stop" to stop ray ===================="
     exit 1
 fi
-PORT=$(( ( RANDOM % 10000 +1000) ))
-ray start --head --port $PORT
+# PORT=$(( ( RANDOM % 10000 +1000) ))
+PORT=1110
+ray start --head --port $PORT --dashboard-port=1029
 
-WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
+WANDB_API_KEY="272dc3566c3a3bff61862fe1de87fe2aa3582963" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
@@ -70,8 +71,9 @@ do
         actor_rollout_ref.actor.optim.lr=1e-6 \
         actor_rollout_ref.model.use_remove_padding=True \
         actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
-        actor_rollout_ref.actor.use_kl_loss=False \
+        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
+        actor_rollout_ref.actor.use_kl_loss=True \
+        actor_rollout_ref.actor.kl_loss_update=False \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -81,7 +83,7 @@ do
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=False \
         actor_rollout_ref.rollout.free_cache_engine=False \
@@ -104,13 +106,14 @@ do
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
         trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
-        trainer.rollout_data_dir=outputs/ \
+        trainer.rollout_data_dir=/data1/hhzhang/ARLArena/outputs/${project_name}/${experiment_name} \
         trainer.project_name=$project_name \
         trainer.experiment_name=$experiment_name \
         trainer.n_gpus_per_node=$NUM_GPUS \
         trainer.nnodes=1 \
-        trainer.save_freq=-1 \
+        trainer.save_freq=10 \
         trainer.test_freq=5 \
-        trainer.total_epochs=120 \
+        trainer.total_epochs=150 \
+        trainer.max_actor_ckpt_to_keep=3 \
         trainer.val_before_train=True $@
 done

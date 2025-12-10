@@ -68,6 +68,7 @@ actor_rollout_ref:
     use_torch_compile: True # False to disable torch compile
     kl_loss_coef: 0.001 # for grpo
     kl_loss_type: low_var_kl # for grpo
+    kl_loss_update: False
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size

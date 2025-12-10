@@ -21,15 +21,51 @@ implement PPO
 
 import numpy as np
 import torch
-
+import re
 import verl.utils.torch_functional as verl_F
 
 from collections import defaultdict, Counter
 from verl import DataProto
 import uuid
-
+from omegaconf import DictConfig
 from difflib import SequenceMatcher
+from typing import Any, Callable, Optional
 from typing import Sequence, List, Dict, Any
+from verl.trainer.config import AlgoConfig
+from verl.utils.import_utils import deprecated
+from verl.workers.config import ActorConfig
+
+PolicyLossFn = Callable[
+    [
+        torch.Tensor,  # old_log_prob
+        torch.Tensor,  # log_prob
+        torch.Tensor,  # advantages
+        torch.Tensor,  # response_mask
+        str,  # loss_agg_mode
+        Optional[DictConfig | AlgoConfig],  # config
+    ],
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+]
+
+POLICY_LOSS_REGISTRY: dict[str, PolicyLossFn] = {}
+
+
+def register_policy_loss(name: str) -> Callable[[PolicyLossFn], PolicyLossFn]:
+    """Register a policy loss function with the given name.
+
+    Args:
+        name (str): The name to register the policy loss function under.
+
+    Returns:
+        function: Decorator function that registers the policy loss function.
+    """
+
+    def decorator(func: PolicyLossFn) -> PolicyLossFn:
+        POLICY_LOSS_REGISTRY[name] = func
+        return func
+
+    return decorator
+
 
 
 class AdaptiveKLController:
@@ -69,7 +105,11 @@ def get_kl_controller(kl_ctrl):
     else:
         raise NotImplementedError
 
-
+## =================================================================
+## =============================1️⃣ PPO =============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_gae_advantage_return(
     token_level_rewards: torch.Tensor,
     values: torch.Tensor,
@@ -114,7 +154,11 @@ def compute_gae_advantage_return(
         advantages = verl_F.masked_whiten(advantages, response_mask)
     return advantages, returns
 
-
+## =================================================================
+## =============================2️⃣ GRPO ============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
@@ -252,7 +296,11 @@ def compute_grpo_passk_outcome_advantage(
     advantages = advantages.unsqueeze(-1) * response_mask
     return advantages, advantages
 
-
+## =================================================================
+## =========================3️⃣ Reinforce++ =========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
     """
     Compute advantage for RF++-baseline (https://arxiv.org/abs/2501.03262), operating only on Outcome reward
@@ -299,6 +347,11 @@ def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: 
     return scores, scores
 
 
+## =================================================================
+## =============================4️⃣ RLOO ============================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_rloo_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: np.ndarray, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
     """
     Compute advantage for RLOO based on https://arxiv.org/abs/2402.14740
@@ -375,7 +428,11 @@ def compute_reinforce_plus_plus_outcome_advantage(token_level_rewards: torch.Ten
 
     return advantages, returns
 
-
+## =================================================================
+## =============================5️⃣ ReMaX ===========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
 def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_baselines: torch.Tensor, response_mask: torch.Tensor):
     """
     Compute advantage for ReMax, operating only on Outcome reward
@@ -404,10 +461,170 @@ def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_ba
     return advantages, returns
 
 
+## =================================================================
+## =============================6️⃣ GiGPO ===========================
+## =================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
+                                   step_rewards: torch.Tensor,
+                                   response_mask: torch.Tensor,
+                                   anchor_obs: np.array,
+                                   index: np.array,
+                                   traj_index: np.array,
+                                   epsilon: float = 1e-6,
+                                   step_advantage_w: float = 1.0,
+                                   mode: str = "mean_norm",
+                                   enable_similarity: bool = False,
+                                   similarity_thresh: float = 0.95,
+                                   ):
+    """
+    Compute the advantages for GiGPO (https://arxiv.org/abs/2505.10978).
+    """
+    if mode == "mean_std_norm":
+        remove_std = False
+    elif mode == "mean_norm":
+        remove_std = True
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    # Compute episode relative advantages (Eq. 3 in the paper).
+    episode_advantages = episode_norm_reward(token_level_rewards, response_mask, index, traj_index, epsilon, remove_std)
+    
+    # Anchor state grouping (Eq. 6 in the paper).
+    step_group_uids = build_step_group(anchor_obs, index, enable_similarity, similarity_thresh)
+
+    # Compute step relative advantages (Eq. 7 in the paper).
+    step_advantages = step_norm_reward(step_rewards, response_mask, step_group_uids, epsilon, remove_std)
+
+    # Compute joint advantages (Eq. 8 in the paper).
+    scores = episode_advantages + step_advantage_w * step_advantages
+    return scores, scores
+
+
+## ================================================================
+## ============================= 7️⃣ AEPO ==========================
+## ================================================================
+# 🌟 Note: AEPO does not have its own specific advantage estimator.
+#    Instead, it uses the same advantage estimation as GRPO by default.
+# 📄 The loss function for AEPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("aepo").
+
+
+## ================================================================
+## ============================= 8️⃣ DAPO ==========================
+## ================================================================
+# 🌟 Note: DAPO uses the same advantage computation as Grpo.
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+
+
+## ================================================================
+## ============================ 9️⃣ Dr GRPO ========================
+## ================================================================
+# 🌟 Note: Dr.GRPO only changes norm_adv_by_std_in_grpo=False
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+# ray_trainer.py: self.config.actor_rollout_ref.actor.policy_loss.loss_agg_mode = "seq-mean-token-sum"
+
+## =================================================================
+## ============================= 🔟 GSPO ===========================
+## =================================================================
+# 🌟 Note: GSPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for GSPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("gspo").
+
+## ================================================================
+## =========================== 1️⃣1️⃣ CISPO ==========================
+## ================================================================
+# 🌟 Note: CISPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for CISPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("cispo").
+
+
+## ================================================================
+## =========================== 1️⃣2️⃣ EMPG ==========================
+## ================================================================
+# 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla")
+def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
+    """
+    Args:
+        tokenizer: The tokenizer for identifying response segments.
+        batch: A data batch with 'responses', 'old_entropy', 'advantages'.
+        k (float): Hyperparameter for self-calibrating gradient scaling.
+        k_f (float): Hyperparameter for the future clarity bonus.
+        zeta (float): Hyperparameter for the future clarity bonus.
+    """
+
+    # --- 1. Calculate Modulated Advantage Components ---
+    H = np.array(batch.batch['old_entropy'])
+    # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
+    min_H, max_H = np.min(H), np.max(H)
+    H_norm = (H - min_H) / (max_H - min_H + 1e-8)
+    # Self-calibrating gradient scaling g(H) (Eq. 10)
+    g_H_unnormalized = np.exp(-k * H_norm)
+    mean_g_H = np.mean(g_H_unnormalized)
+    g_H = g_H_unnormalized / (mean_g_H + 1e-8)
+    # Future clarity bonus f(H) (Eq. 11)
+    f_H = np.exp(-k_f * H_norm)
+    # Convert to tensors for PyTorch operations
+    g_H = torch.tensor(g_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+    f_H = torch.tensor(f_H, device=batch.batch['advantages'].device, dtype=torch.float32)
+    batch.batch['f_entropy'] = f_H
+
+    # --- 2. Group into trajectories ---
+    
+    steps2traj_f_H = defaultdict(list)  # key: (idx, traj), value: list of step-score tensors
+    with torch.no_grad():
+        bsz = batch.batch.batch_size[0]
+        for i in range(bsz):
+            raw_prompt = batch.non_tensor_batch['raw_prompt'][i][0]['content']
+            m = re.search(r'you have already taken (\d+) step\(s\)', raw_prompt)
+            if m:
+                turn_idx = int(m.group(1))
+            else:
+                turn_idx = 0
+            key = (batch.non_tensor_batch['traj_uid'][i], turn_idx)
+            steps2traj_f_H[key].append(batch.batch['f_entropy'][i])
+
+    # --- 3. Second Pass: Apply Advantage Modulation (Eq. 8) ---
+    for i in range(batch.batch.batch_size[0]):
+        
+        # Apply self-calibrating gradient scaling
+        batch.batch['advantages'][i] *= g_H[i]
+
+        m = re.search(r'you have already taken (\d+) step\(s\)', raw_prompt)
+        if m:
+            turn_idx = int(m.group(1))
+        else:
+            turn_idx = 0
+        
+        if turn_idx+1 < len(steps2traj_f_H[key]):
+            f_H_key = (batch.non_tensor_batch['traj_uid'][i], turn_idx+1)
+            batch.batch['advantages'] += zeta * steps2traj_f_H[f_H_key]
+        
+        batch.batch['advantages'] -= torch.mean(batch.batch['advantages'])
+
+    return batch.batch['advantages'], batch.batch['advantages']
+
+## ================================================================
+## =========================== 1️⃣3️⃣ SAPO ===========================
+## ================================================================
+# 🌟 Note: SAPO has no specific advantage estimator, so we use the same as Grpo.
+# 📄 The loss function for SAPO is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("sapo").
+
+## ================================================================
+## ======================== 1️⃣4️⃣ Vanilla Grpo ======================
+## ================================================================
+# 🌟 Note: Vanilla Grpo set compute_mean_std_cross_steps=False
+# 📄 The loss function for Vanilla Grpo is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
+#    @register_policy_loss("vanilla").
+
 def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
     kl = old_log_prob - ref_log_prob
     return token_level_scores - kl * kl_ratio
-
 
 def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str):
     """
@@ -662,9 +879,72 @@ def compute_pf_ppo_reweight_data(
 
     return resampled_data
 
-# ---------------------------------------------------------- #
-# --------------- General Functions of GiGPO --------------- #
-# ---------------------------------------------------------- #
+
+## ================================================================
+## ========================= General Utils ========================
+## ================================================================
+
+def process_token_sequences(
+    token_id_tensor: torch.Tensor,
+    start_end_delimiter_seq: list[int] = [151644, 77091, 198],
+    target_delimiter_seq: list[int] = [151645],
+    head_sequence: list[int] = [151645, 151644, 87280]
+) -> dict:
+    """
+    Processes a token ID tensor to find tokens between specific delimiters and
+    the end index of a leading sequence.
+    Args:
+        token_id_tensor (torch.Tensor): A 1D PyTorch tensor of token IDs.
+        start_end_delimiter_seq (list[int]): The sequence marking the start and end
+                                              of the segments to extract.
+                                              For your case, this is [151644, 77091, 1699]
+                                              for start, and [151645] for end.
+                                              This function assumes the 'start' sequence
+                                              is [151644, 77091, 1699] and the 'end' sequence
+                                              is [151645] as per your previous requests.
+        target_delimiter_seq (list[int]): The sequence to mark the end of segments
+                                            when found after start_end_delimiter_seq.
+                                            For your case, this is [151645].
+        head_sequence (list[int]): The sequence to find from the beginning of the tensor,
+                                   and return its exclusive end index.
+                                   For your case, this is [151645, 151644, 872].
+    Returns:
+        dict: A dictionary containing:
+              - 'between_delimiters': A list of tuples, where each tuple contains:
+                                      (start_index_of_tokens, end_index_of_tokens, tokens_tensor).
+                                      These are the tokens found between `start_end_delimiter_seq`
+                                      and `target_delimiter_seq`.
+              - 'first_head_sequence_end_index': The exclusive end index of the first
+                                                 `head_sequence` found from the beginning of the tensor.
+                                                 Returns -1 if not found.
+    """
+    if not isinstance(token_id_tensor, torch.Tensor) or token_id_tensor.ndim != 1:
+        raise ValueError("token_id_tensor must be a 1D PyTorch tensor.")
+    if not start_end_delimiter_seq or not target_delimiter_seq or not head_sequence:
+        raise ValueError("All sequence arguments cannot be empty.")
+    results = []
+    start_seq_len = len(start_end_delimiter_seq)
+    target_seq_len = len(target_delimiter_seq)
+    head_seq_len = len(head_sequence)
+    start_seq_tensor = torch.tensor(start_end_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    target_seq_tensor = torch.tensor(target_delimiter_seq, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    head_seq_tensor = torch.tensor(head_sequence, dtype=token_id_tensor.dtype, device=token_id_tensor.device)
+    # --- Part 1: Find the end index of the first head_sequence from the beginning ---
+    for k in range(len(token_id_tensor) - head_seq_len + 1):
+        if torch.equal(token_id_tensor[k : k + head_seq_len], head_seq_tensor):
+            results.append((0, k + head_seq_len))
+            break # Found the first one, no need to search further
+    # --- Part 2: Find tokens between start_end_delimiter_seq and target_delimiter_seq ---
+    for i in range(len(token_id_tensor) - start_seq_len + 1):
+        if torch.equal(token_id_tensor[i : i + start_seq_len], start_seq_tensor):
+            for j in range(i + start_seq_len, len(token_id_tensor) - target_seq_len + 1):
+                if torch.equal(token_id_tensor[j : j + target_seq_len], target_seq_tensor):
+                    tokens_start_idx = i + start_seq_len
+                    tokens_end_idx = j
+                    results.append((tokens_start_idx, tokens_end_idx + 1))
+                    break # Found a pair, move to find the next start_end_delimiter_seq
+    return results
+
 def to_hashable(x):
     """Convert an object into a hashable type (used for clustering/grouping)."""
     if isinstance(x, (int, float, str, bool)):
@@ -764,45 +1044,6 @@ def compute_step_discounted_returns(batch: DataProto, gamma: float):
     
     all_returns = torch.tensor(all_returns, dtype=torch.float32, device=batch.batch['input_ids'].device)
     return all_returns
-
-# ---------------------------------------------------------- #
-# ---------------- Core Functions of GiGPO ----------------- #
-# ---------------------------------------------------------- #
-
-def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
-                                   step_rewards: torch.Tensor,
-                                   response_mask: torch.Tensor,
-                                   anchor_obs: np.array,
-                                   index: np.array,
-                                   traj_index: np.array,
-                                   epsilon: float = 1e-6,
-                                   step_advantage_w: float = 1.0,
-                                   mode: str = "mean_norm",
-                                   enable_similarity: bool = False,
-                                   similarity_thresh: float = 0.95,
-                                   ):
-    """
-    Compute the advantages for GiGPO (https://arxiv.org/abs/2505.10978).
-    """
-    if mode == "mean_std_norm":
-        remove_std = False
-    elif mode == "mean_norm":
-        remove_std = True
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-    
-    # Compute episode relative advantages (Eq. 3 in the paper).
-    episode_advantages = episode_norm_reward(token_level_rewards, response_mask, index, traj_index, epsilon, remove_std)
-    
-    # Anchor state grouping (Eq. 6 in the paper).
-    step_group_uids = build_step_group(anchor_obs, index, enable_similarity, similarity_thresh)
-
-    # Compute step relative advantages (Eq. 7 in the paper).
-    step_advantages = step_norm_reward(step_rewards, response_mask, step_group_uids, epsilon, remove_std)
-
-    # Compute joint advantages (Eq. 8 in the paper).
-    scores = episode_advantages + step_advantage_w * step_advantages
-    return scores, scores
 
 
 def episode_norm_reward(token_level_rewards: torch.Tensor,
