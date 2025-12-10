@@ -836,7 +836,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                             warmup=1,  # 第2步作为热身，不计入结果
                             active=3,  # 采集后面3步的性能数据
                             repeat=2),  # 重复2轮
-                        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),  # 保存日志以供 TensorBoard 可视化
+                        on_trace_ready=torch.profiler.tensorboard_trace_handler(self.config.trainer.rollout_data_dir),  # 保存日志以供 TensorBoard 可视化
                         record_shapes=True,  # 记录输入张量的形状
                         profile_memory=True,  # 分析内存分配
                         with_stack=True  # 记录操作的调用堆栈信息
