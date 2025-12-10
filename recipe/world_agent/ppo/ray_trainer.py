@@ -855,7 +855,6 @@ class WorldAgentTrainer(RayPPOTrainer):
 
                 is_last_step = self.global_steps >= self.total_training_steps
 
-                breakpoint()
                 with marked_timer("step", timing_raw):
                     # generate a batch
                     with marked_timer("gen", timing_raw):
@@ -1012,7 +1011,6 @@ class WorldAgentTrainer(RayPPOTrainer):
 
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
-                        breakpoint()
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
