@@ -22,7 +22,7 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL##*/}"
-estimator="grpo"
+estimator="gigpo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
