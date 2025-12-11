@@ -836,10 +836,10 @@ class ShopAgentTrainer(RayPPOTrainer):
                             torch.profiler.ProfilerActivity.CPU,
                             torch.profiler.ProfilerActivity.CUDA],  # 分析 CPU 和 CUDA 活动
                         schedule=torch.profiler.schedule(
-                            wait=1,  # 前1步不采样
-                            warmup=1,  # 第2步作为热身，不计入结果
-                            active=3,  # 采集后面3步的性能数据
-                            repeat=2),  # 重复2轮
+                            wait=0,  # 前1步不采样
+                            warmup=0,  # 第2步作为热身，不计入结果
+                            active=1,  # 采集后面3步的性能数据
+                            repeat=1),  # 重复2轮
                         on_trace_ready=torch.profiler.tensorboard_trace_handler(self.config.trainer.rollout_data_dir),  # 保存日志以供 TensorBoard 可视化
                         record_shapes=True,  # 记录输入张量的形状
                         profile_memory=True,  # 分析内存分配
@@ -1075,7 +1075,7 @@ class ShopAgentTrainer(RayPPOTrainer):
                                 log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
                                 old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
                                 entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
-                                
+                                advantages = batch.batch["advantages"]
 
                                 if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
                                     ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
