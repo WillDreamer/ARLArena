@@ -75,6 +75,7 @@ trainer:
   logger: ['console','wandb']
   project_name: math_agent
   experiment_name: math_agent_math
+  remove_extra_void_turn: False
 
 critic:
   ppo_micro_batch_size_per_gpu: 4

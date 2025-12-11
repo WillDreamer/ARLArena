@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(6)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -9,38 +9,37 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-
+PATH_PREFIX=/data1/xw27/agent/ARLArena
 source /data1/xw27/miniconda3/etc/profile.d/conda.sh
-cd /home/xw27/agent/ARLArena
+cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=4
+TRAIN_BATCH_SIZE=128
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=512
-MAX_RESPONSE_LENGTH=512
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=4096
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=2
-PPO_MICRO_TOKEN=20000
-TOTAL_EPOCHS=2
-TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
-# VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
-ROLLOUT_GPU_MEMORY_UTIL=0.4
+PPO_MINI_BATCH_SIZE=128
+PPO_MICRO_TOKEN=24000
+TOTAL_EPOCHS=1
+TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
+VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
+ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-REMOVE_EXTRA_VOID_TURN=True
 MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=True #mask for now
+REMOVE_CLIP=False #mask for now
+REMOVE_EXTRA_VOID_TURN=False
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
-REJECTION_SAMPLE=True
+REJECTION_SAMPLE=False
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -49,7 +48,7 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=2
+OVERSAMPLE=1
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
@@ -60,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_dynamic_removeclip_temp1.0_removevoidturn_temp1
+RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_bs128_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -199,7 +198,6 @@ while [[ "$#" -gt 0 ]]; do
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
     --output_acc_to_file) OUTPUT_ACC_TO_FILE="$2"; shift 2 ;;
-    --remove_extra_void_turn) REMOVE_EXTRA_VOID_TURN="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -224,8 +222,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1012
-DASHBOARD_PORT=1013
+PORT=1376
+DASHBOARD_PORT=1377
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -248,7 +246,7 @@ echo "grad clip: $GRAD_CLIP"
 echo "Actor Learning Rate: $ACTOR_LR"
 echo "balance batch: $BALANCE_BATCH"
 echo "Oversample Multiplier: $OVERSAMPLE"
-echo "Remove Extra Void Turn: $REMOVE_EXTRA_VOID_TURN"
+
 # set ppo micro token
 PPO_MICRO_TOKEN=$(generate_model_micro_token "$MODEL_NAME")
 echo "PPO_MICRO_TOKEN: $PPO_MICRO_TOKEN"

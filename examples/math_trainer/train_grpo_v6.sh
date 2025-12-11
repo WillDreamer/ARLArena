@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -34,6 +34,7 @@ VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home
 ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
+REMOVE_EXTRA_VOID_TURN=True
 MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
@@ -59,7 +60,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r8192_n8_4B_Base_grpo_dynamic_removeclip_temp1.0
+RUN_NAME=math_p8192_r8192_n8_4B_Base_grpo_dynamic_removeclip_temp1.0_removevoidturn
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -198,6 +199,7 @@ while [[ "$#" -gt 0 ]]; do
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
     --output_acc_to_file) OUTPUT_ACC_TO_FILE="$2"; shift 2 ;;
+    --remove_extra_void_turn) REMOVE_EXTRA_VOID_TURN="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -246,7 +248,7 @@ echo "grad clip: $GRAD_CLIP"
 echo "Actor Learning Rate: $ACTOR_LR"
 echo "balance batch: $BALANCE_BATCH"
 echo "Oversample Multiplier: $OVERSAMPLE"
-
+echo "Remove Extra Void Turn: $REMOVE_EXTRA_VOID_TURN"
 # set ppo micro token
 PPO_MICRO_TOKEN=$(generate_model_micro_token "$MODEL_NAME")
 echo "PPO_MICRO_TOKEN: $PPO_MICRO_TOKEN"
@@ -356,6 +358,7 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     trainer.resume_mode=$RESUME_MODE \
     trainer.resume_from_path=$RESUME_FROM_PATH \
     trainer.balance_batch=$BALANCE_BATCH \
+    trainer.remove_extra_void_turn=$REMOVE_EXTRA_VOID_TURN \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
     data.max_start_length=4096 \
