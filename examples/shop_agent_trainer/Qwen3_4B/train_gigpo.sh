@@ -69,7 +69,6 @@ do
         data.filter_overlong_prompts=True \
         data.truncation='error' \
         data.return_raw_chat=True \
-        critic.model.path=$MODEL \
         actor_rollout_ref.model.path=$MODEL \
         actor_rollout_ref.actor.optim.lr=1e-6 \
         actor_rollout_ref.model.use_remove_padding=True \
@@ -105,7 +104,6 @@ do
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
         trainer.rollout_data_dir=outputs/${experiment_name} \
-        trainer.critic_warmup=0 \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
         trainer.experiment_name=$experiment_name \
