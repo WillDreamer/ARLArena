@@ -515,12 +515,6 @@ class DataParallelPPOActor(BasePPOActor):
                     else:
                         loss = policy_loss * loss_scale_factor
                     loss.backward()
-                    
-                    # self.actor_module.parameters_grad = {}
-                    # for name, param in self.actor_module.named_parameters():
-                    #     if param.requires_grad:
-                    #         self.actor_module.parameters_grad[name] = param.grad.detach().clone()
-                    # self.actor_module.parameters_grad = torch.cat([grad.view(-1) for grad in self.actor_module.parameters_grad.values()], dim=0).mean().item()
 
                     micro_batch_metrics.update(
                         {
