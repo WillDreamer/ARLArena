@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -84,7 +84,7 @@ do
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \
         actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-        actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
         actor_rollout_ref.rollout.enable_chunked_prefill=False \
         actor_rollout_ref.rollout.enforce_eager=True \
         actor_rollout_ref.rollout.free_cache_engine=False \
@@ -101,6 +101,7 @@ do
         env.max_steps=15 \
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
+        trainer.critic_warmup=0 \
         trainer.rollout_data_dir=./outputs/${experiment_name} \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \

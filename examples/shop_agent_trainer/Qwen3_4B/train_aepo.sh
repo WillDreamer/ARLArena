@@ -101,6 +101,7 @@ do
         env.max_steps=15 \
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
+        trainer.critic_warmup=0 \
         trainer.rollout_data_dir=./outputs/${experiment_name} \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
