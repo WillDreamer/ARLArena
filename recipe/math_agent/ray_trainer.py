@@ -1476,12 +1476,12 @@ class RayMathAgentTrainer(RayPPOTrainer):
                         loss_mask = batch.batch["info_mask"][:, -response_length:]
                         
                         batch.batch["loss_mask"] = loss_mask * response_mask
+                        if self.config.trainer.remove_extra_void_turn:
+                            batch.batch["loss_mask"] = batch.batch[
+                                "loss_mask"
+                            ] * batch.batch["void_turn_mask"].reshape(-1, 1)
 
-                        batch.batch["loss_mask"] = batch.batch[
-                            "loss_mask"
-                        ] * batch.batch["void_turn_mask"].reshape(-1, 1)
-
-                        batch.batch["response_mask"] = batch.batch["loss_mask"] # the response mask is the loss mask
+                            batch.batch["response_mask"] = batch.batch["loss_mask"] # the response mask is the loss mask
 
                         metrics.update(
                             {
