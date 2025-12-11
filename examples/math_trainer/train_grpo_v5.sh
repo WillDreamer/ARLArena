@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(6)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -15,31 +15,32 @@ cd /home/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=512
+TRAIN_BATCH_SIZE=4
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=4
+ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8192
-MAX_RESPONSE_LENGTH=16384
+MAX_PROMPT_LENGTH=512
+MAX_RESPONSE_LENGTH=512
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
+PPO_MINI_BATCH_SIZE=2
+PPO_MICRO_TOKEN=20000
 TOTAL_EPOCHS=2
 TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
 # VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench" "/home/xw27/agent/ARLArena/datasets/deepscaler/math_500")
+VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.4
-ACTOR_OPTIMIZER_OFFLOAD=True
-ACTOR_PARAMETER_OFFLOAD=True
-MODEL_NAME=Qwen/Qwen3-4B
+ACTOR_OPTIMIZER_OFFLOAD=False
+ACTOR_PARAMETER_OFFLOAD=False
+REMOVE_EXTRA_VOID_TURN=True
+MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=False #mask for now
+REMOVE_CLIP=True #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
-REJECTION_SAMPLE=False
+REJECTION_SAMPLE=True
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -48,18 +49,18 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=1
+OVERSAMPLE=2
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
-CONFIG_NAME=simpletir_trainer
+CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
 RESUME=False
-PROJECT_NAME=simpletir_math
+PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_noover
+RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_dynamic_removeclip_temp1.0_removevoidturn_temp1
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -198,6 +199,7 @@ while [[ "$#" -gt 0 ]]; do
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
     --output_acc_to_file) OUTPUT_ACC_TO_FILE="$2"; shift 2 ;;
+    --remove_extra_void_turn) REMOVE_EXTRA_VOID_TURN="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -222,8 +224,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1380
-DASHBOARD_PORT=1381
+PORT=1012
+DASHBOARD_PORT=1013
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -246,7 +248,7 @@ echo "grad clip: $GRAD_CLIP"
 echo "Actor Learning Rate: $ACTOR_LR"
 echo "balance batch: $BALANCE_BATCH"
 echo "Oversample Multiplier: $OVERSAMPLE"
-
+echo "Remove Extra Void Turn: $REMOVE_EXTRA_VOID_TURN"
 # set ppo micro token
 PPO_MICRO_TOKEN=$(generate_model_micro_token "$MODEL_NAME")
 echo "PPO_MICRO_TOKEN: $PPO_MICRO_TOKEN"
@@ -294,7 +296,7 @@ echo "CONFIG_NAME: $CONFIG_NAME"
 # ======================== wandb ========================
 export SANDBOX_ENDPOINT=http://127.0.0.1:12345/faas/sandbox/
 # export WANDB_ENTITY="RL_Reasoning"
-export WANDB_PROMPT_VERSION="simpletir"
+export WANDB_PROMPT_VERSION="math_agent"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
 WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 # Login to WandB (if API key is provided)
@@ -307,7 +309,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 
 
-PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
+PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
     algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
@@ -356,6 +358,7 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     trainer.resume_mode=$RESUME_MODE \
     trainer.resume_from_path=$RESUME_FROM_PATH \
     trainer.balance_batch=$BALANCE_BATCH \
+    trainer.remove_extra_void_turn=$REMOVE_EXTRA_VOID_TURN \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
     data.max_start_length=4096 \
