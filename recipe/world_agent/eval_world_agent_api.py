@@ -67,6 +67,8 @@ def safe_load_tokenizer(model_path: str):
 def main(config):
     # 禁止 tokenizer 的多线程，避免多进程报错
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    print(f"[CONFIG] Using API model: {config.model_config.model_name}")
+    print(f"[CONFIG] Model provider: {config.model_info[config.model_config.model_name].provider_name}")
     print(config.data)
 
     tokenizer = safe_load_tokenizer(config.actor_rollout_ref.model.path)
@@ -160,7 +162,8 @@ def main(config):
             metrics_payload = {
                 "seed": config.env.seed,
                 "timestamp": timestamp,
-                "model": config.actor_rollout_ref.model.path,
+                "model": config.model_config.model_name,  # Use actual API model name
+                "tokenizer": config.actor_rollout_ref.model.path,  # Keep tokenizer path for reference
                 "data": {
                     "train": config.data.train_files,
                     "val": config.data.val_files,

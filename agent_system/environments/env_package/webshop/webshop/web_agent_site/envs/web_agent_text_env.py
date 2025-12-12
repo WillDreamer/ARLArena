@@ -92,6 +92,12 @@ class WebAgentTextEnv(gym.Env):
         self.prev_actions = []
         self.num_prev_obs = self.kwargs.get('num_prev_obs', 0)
         self.num_prev_actions = self.kwargs.get('num_prev_actions', 0)
+
+        # Track best reward and done state for "retry on failure" logic
+        self._best_reward = 0.0
+        self._is_done = False
+        self._current_session_int = None
+
         self.reset()
 
     def step(self, action):
@@ -104,6 +110,11 @@ class WebAgentTextEnv(gym.Env):
           - click[value]
         If action not valid, perform nothing.
         """
+        #添加上去的, 退出检查
+        # If already done, refuse new actions and return immediately
+        if hasattr(self, '_is_done') and self._is_done:
+            return self.observation, 0.0, True, None
+
         info = None
         self.get_available_actions()
 
@@ -135,8 +146,38 @@ class WebAgentTextEnv(gym.Env):
         self.prev_obs.append(ob)
         if 'info' in status:
             info = status['info']
+
+        # Handle buy now logic: retry on failure, terminate on success
         if status['done']:
-            self.reset()
+            raw_reward = status['reward']
+            # Track the best reward achieved in this episode
+            self._best_reward = max(self._best_reward, raw_reward)
+
+            if raw_reward == 1.0:
+                # Perfect match - terminate episode
+                self._is_done = True
+                # Keep done=True, reward=1.0
+                # Add best_reward to info for logging
+                if info is None:
+                    info = {}
+                info['best_reward'] = self._best_reward
+            else:
+                # Failed purchase - reset to same goal and continue
+                # Reset to the same session/goal
+                new_obs, _ = self.reset(
+                    session=self._current_session_int,
+                    instruction_text=self.instruction_text
+                )
+                # Override done to False to continue episode
+                status['done'] = False
+                # Keep the raw_reward for task_score tracking
+                # Update state to the new observation after reset
+                state = new_obs
+                # Add best_reward to info for logging
+                if info is None:
+                    info = {}
+                info['best_reward'] = self._best_reward
+
         return state, status['reward'], status['done'], info
 
     def get_available_actions(self):
@@ -269,6 +310,12 @@ class WebAgentTextEnv(gym.Env):
 
         self.text_to_clickable = None
         self.instruction_text = self.get_instruction_text() if instruction_text is None else instruction_text
+
+        # Reset tracking variables
+        self._is_done = False
+        self._best_reward = 0.0
+        self._current_session_int = session_int
+
         obs = self.observation
         self.prev_obs = [obs]
         self.prev_actions = []

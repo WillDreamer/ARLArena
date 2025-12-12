@@ -21,6 +21,31 @@ from verl.utils import hf_processor
 from recipe.shop_agent.main_shop_agent import create_rl_dataset, create_rl_sampler
 
 from pathlib import Path
+from numbers import Number
+
+
+def to_serializable(obj):
+    """Convert common numpy/torch scalars and arrays to JSON friendly types."""
+    if isinstance(obj, dict):
+        return {k: to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_serializable(v) for v in obj]
+    # Handle numpy/torch scalar with .item()
+    if hasattr(obj, "item") and callable(obj.item):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    # Handle numpy arrays
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    if isinstance(obj, (str, Number)) or obj is None:
+        return obj
+    return str(obj)
+
 
 def safe_load_tokenizer(model_path: str):
     """安全加载 tokenizer，处理路径问题"""
@@ -83,11 +108,16 @@ def main(config):
     #         drop_last=True,
     #         collate_fn=collate_fn,
     #         sampler=train_sampler)
-    
+
+    # Use batch_size from config, fallback to 64 if not specified
+    val_bs = config.data.val_batch_size if config.data.val_batch_size is not None else 64
+    val_workers = min(8, os.cpu_count() or 2)
+    print(f"[DEBUG] val_batch_size from config: {config.data.val_batch_size}, using: {val_bs}")
+
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=64,
-            num_workers=2,
+            batch_size=val_bs,
+            num_workers=val_workers,
             shuffle=True,
             drop_last=False,
             collate_fn=collate_fn,
@@ -139,6 +169,13 @@ def main(config):
                         envs=envs
                         )
 
+        # Extract metrics from result
+        success_rate = result.get("success_rate", {})
+        success = result.get("success", {})
+        print("\nSuccess rate:")
+        for k, v in success_rate.items():
+            print(f"  {k}: {v}")
+
         # Persist every evaluation result for later inspection
         snapshot_dir = Path("outputs_webshop") / "eval_results"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +188,29 @@ def main(config):
         except Exception as exc:
             print(f"Warning: failed to save evaluation result to {snapshot_path}: {exc}")
 
+        # Save human-readable metrics to JSON alongside the pickle
+        metrics_json = snapshot_dir / f"result_seed{config.env.seed}_{timestamp}.json"
+        try:
+            import json
+            metrics_payload = {
+                "seed": config.env.seed,
+                "timestamp": timestamp,
+                "model": config.actor_rollout_ref.model.path,
+                "data": {
+                    "train": config.data.train_files,
+                    "val": config.data.val_files,
+                },
+                "success_rate": to_serializable(success_rate),
+                "success": to_serializable(success),
+                "step_io_history_len": len(result.get("step_io_history", [])),
+                "pkl_path": str(snapshot_path),
+            }
+            with metrics_json.open("w", encoding="utf-8") as jf:
+                json.dump(metrics_payload, jf, ensure_ascii=False, indent=2)
+            print(f"Saved metrics summary to {metrics_json}")
+        except Exception as exc:
+            print(f"Warning: failed to save metrics JSON to {metrics_json}: {exc}")
+
         # 提取success['webshop_task_score']大于0.8对应的response_texts，并保存
         task_scores = result['success'].get('webshop_task_score (not success_rate)', None)
         response_texts = result['step_io_history']
@@ -161,7 +221,7 @@ def main(config):
             # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
             all_turns = []
             for sample_idx, score in enumerate(task_scores):
-                if score is not None and score > 0.9:
+                if score is not None and score >= 0.0: #原本是0.9
                     turns = []
                     # response_texts为每轮list，每轮包含该batch（n）的信息
                     for turn in response_texts:
@@ -171,15 +231,74 @@ def main(config):
                             "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
                             "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None
                         }
+
+                        # 添加 env_feedback（如果存在的话）
+                        if 'env_feedback' in turn:
+                            env_feedback = turn['env_feedback']
+                            try:
+                                # next_obs is a dict with keys ['text', 'image', 'anchor']
+                                # Each value is a list of observations for all samples
+                                next_obs_dict = env_feedback.get('next_obs', {})
+                                next_obs_data = None
+                                if next_obs_dict:
+                                    next_obs_data = {
+                                        'text': next_obs_dict.get('text', [None]*64)[sample_idx] if next_obs_dict.get('text') else None,
+                                        'image': next_obs_dict.get('image'),  # Usually None
+                                        'anchor': next_obs_dict.get('anchor', [None]*64)[sample_idx] if next_obs_dict.get('anchor') else None,
+                                    }
+
+                                turn_result['env_feedback'] = {
+                                    "next_obs": next_obs_data,
+                                    "reward": list(env_feedback.get('rewards', []))[sample_idx] if env_feedback.get('rewards') is not None else None,
+                                    "done": list(env_feedback.get('dones', []))[sample_idx] if env_feedback.get('dones') is not None else None,
+                                    "info": list(env_feedback.get('infos', []))[sample_idx] if env_feedback.get('infos') is not None else None
+                                }
+                            except (IndexError, KeyError, TypeError) as e:
+                                # If extraction fails, skip env_feedback for this turn
+                                print(f"Warning: Failed to extract env_feedback for sample_idx={sample_idx}: {e}")
+                                pass
+
+                        # Check if environment is done based on CURRENT turn's input
+                        # The ONLY reliable indicator: admissible actions is empty
+                        is_done = False
+
+                        # Check if current turn has empty admissible actions (env is done)
+                        inp = turn_result.get('inputs', [])
+                        if isinstance(inp, list) and len(inp) > 0 and isinstance(inp[0], dict):
+                            inp_text = inp[0].get('content', '')
+                        else:
+                            inp_text = str(inp) if inp else ''
+
+                        if inp_text and 'admissible actions' in inp_text.lower():
+                            # Extract the actions section
+                            start = inp_text.find('[', inp_text.lower().find('admissible actions'))
+                            if start != -1:
+                                end = inp_text.find(']', start) + 1
+                                actions_part = inp_text[start:end].strip()
+                                # Check if it's essentially empty (only whitespace/newlines between brackets)
+                                content = actions_part[1:-1].strip()  # Remove [ and ]
+                                if not content or content.replace('\n', '').replace(' ', '') == '':
+                                    # Environment is done, don't include this turn
+                                    is_done = True
+
+                        # If done, stop WITHOUT including this turn (it's noise after task completion)
                         turns.append(turn_result)
+                        
+                        if is_done:
+                            break
+
+                        # Otherwise, include this turn
+                        # turns.append(turn_result)
+
                     all_turns.append({
                         "sample_idx": sample_idx,
                         "task_score": score,
-                        "turns": turns
+                        "turns": turns,
+                        "actual_turns": len(turns)  # Record actual number of turns before done
                     })
 
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(all_turns, f, ensure_ascii=False, indent=2)
+                json.dump(to_serializable(all_turns), f, ensure_ascii=False, indent=2)
             print(f"Saved all {len(all_turns)} turns of the multi-turn dialogue to {output_path}")
         
         end_time = time.time()

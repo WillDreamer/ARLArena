@@ -11,7 +11,7 @@ ulimit -n 131072 || true
 export MKL_THREADING_LAYER=GNU
 unset MKL_SERVICE_FORCE_INTEL
 
-MODEL="${MODEL:-gpt-4o-mini}"                    # e.g., gpt-4o-mini or gpt-4o
+MODEL="${MODEL:-gpt-4o}"                    # e.g., gpt-4o-mini or gpt-4o
 TRAIN_DATA="${TRAIN_DATA:-$HOME/data/text/train.parquet}"
 VAL_DATA="${VAL_DATA:-$HOME/data/text/test.parquet}"
 BATCH="${BATCH:-64}"
@@ -19,7 +19,9 @@ MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-4096}"
 MAX_RESP_LEN="${MAX_RESP_LEN:-500}"
 TEMP="${TEMP:-0.6}"
 NUM_CPUS_PER_ENV="${NUM_CPUS_PER_ENV:-0.1}"
-SEED="${SEED:-0}"
+SEED="${SEED:-1211}"
+HISTORY_LENGTH="${HISTORY_LENGTH:-4}"            # Number of past turns shown in prompt 默认为2
+MAX_STEPS="${MAX_STEPS:-60}"                     # Maximum steps per episode
 LOG_DIR="${LOG_DIR:-logs}"
 
 mkdir -p "${LOG_DIR}"
@@ -28,10 +30,11 @@ echo "[INFO] Using MODEL=${MODEL}"
 echo "[INFO] Train data=${TRAIN_DATA}"
 echo "[INFO] Val data=${VAL_DATA}"
 echo "[INFO] Batch size=${BATCH}, Max prompt len=${MAX_PROMPT_LEN}, Max resp len=${MAX_RESP_LEN}"
-echo "[INFO] Seed=${SEED}, CPUs per env=${NUM_CPUS_PER_ENV}"
+echo "[INFO] Seed=${SEED}, Max steps=${MAX_STEPS}, CPUs per env=${NUM_CPUS_PER_ENV}, History length=${HISTORY_LENGTH}"
 echo "[INFO] Logs -> ${LOG_DIR}"
 
 python3 -m recipe.shop_agent.eval_shop_agent_api \
+  model_config.model_name="${MODEL}" \
   data.train_files="${TRAIN_DATA}" \
   data.val_files="${VAL_DATA}" \
   data.train_batch_size="${BATCH}" \
@@ -54,7 +57,8 @@ python3 -m recipe.shop_agent.eval_shop_agent_api \
   actor_rollout_ref.rollout.val_kwargs.do_sample=True \
   env.env_name=Webshop \
   env.seed="${SEED}" \
-  env.max_steps=15 \
+  env.max_steps="${MAX_STEPS}" \
+  env.history_length="${HISTORY_LENGTH}" \
   env.rollout.n=1 \
   env.resources_per_worker.num_cpus="${NUM_CPUS_PER_ENV}" \
   2>&1 | tee "${LOG_DIR}/eval_$(date +%Y%m%d_%H%M%S).log"

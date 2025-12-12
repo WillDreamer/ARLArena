@@ -2,6 +2,7 @@
 model_config:
   model_name: gpt-4o-mini         # ✅ 当前要跑的模型
   max_concurrency: 20             # 可同时发起的请求数
+  eval_system_prompt: "You are an expert AI agent helping users navigate and interact with a WebShop environment. Your task is to analyze the current state, understand available actions, and select the most appropriate action to help achieve the user's goal. Be precise and think step by step."
 
 model_info:
   gpt-4o-mini:
@@ -11,3 +12,12 @@ model_info:
       temperature: 0.7
       max_tokens: 512
       top_p: 0.9
+
+  gpt-4o:
+    provider_name: openai
+    model_name: gpt-4o
+    generation_kwargs:
+      temperature: 0.7
+      max_tokens: 512
+      top_p: 0.9
+

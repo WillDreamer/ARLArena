@@ -180,7 +180,17 @@ class TrajectoryCollector:
 
         if self.config.data.get('return_raw_chat', False):
             row_dict['raw_prompt'] = chat.tolist()
-        
+
+        # Construct OpenAI-format messages for API-based evaluation
+        # This ensures GPT receives proper system prompt instead of Qwen's default
+        eval_system_prompt = self.config.model_config.get('eval_system_prompt',
+            "You are a helpful AI assistant.")
+        openai_messages = [
+            {"role": "system", "content": eval_system_prompt},
+            {"role": "user", "content": obs_content}
+        ]
+        row_dict['openai_messages'] = openai_messages
+
         return row_dict
 
     def preprocess_batch(
@@ -216,12 +226,23 @@ class TrajectoryCollector:
         
         # Aggregate batch data
         batch = collate_fn(processed_samples)
-        
+
         # Create DataProto with preserved metadata
         new_batch = DataProto.from_single_dict(
             data=batch,
             meta_info=gen_batch.meta_info
         )
+
+        # Collect OpenAI messages for API-based models
+        # This allows ApiCallingWrapperWg to use proper messages instead of fallback
+        messages_list = []
+        for sample in processed_samples:
+            if 'openai_messages' in sample:
+                messages_list.append(sample['openai_messages'])
+
+        if messages_list:
+            # Convert to numpy object array for DataProto compatibility
+            new_batch.non_tensor_batch['messages_list'] = np.array(messages_list, dtype=object)
 
         return new_batch
 
@@ -339,6 +360,10 @@ class TrajectoryCollector:
                 non_tensor_batch_keys_to_pop.append("raw_prompt")
             if "tools_kwargs" in batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("tools_kwargs")
+            # CRITICAL: Pop messages_list for API-based models (contains system + user in OpenAI format)
+            if "messages_list" in batch.non_tensor_batch:
+                non_tensor_batch_keys_to_pop.append("messages_list")
+
             batch_input = batch.pop(
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
@@ -352,19 +377,25 @@ class TrajectoryCollector:
             # # unpad
             batch_output = unpad_dataproto(batch_output_padded, pad_size=pad_size)
 
-            # ====== 记录当前step的inputs/outputs ==============
+            text_actions = np.array(batch_output.non_tensor_batch['response_texts'], dtype=object)
+
+            next_obs, rewards, dones, infos = envs.step(text_actions)
+
+            # ====== 记录当前step的inputs/outputs 和环境反馈 ==============
             # 这里保存batch_input和batch_output的DataProto实例的deepcopy(Small batches，deepcopy不大)
             from copy import deepcopy
             step_io_history.append({
                 "step": _step,
                 "inputs": deepcopy(batch_input.non_tensor_batch['raw_prompt']),
-                "outputs": deepcopy(batch_output.non_tensor_batch['response_texts'])
+                "outputs": deepcopy(batch_output.non_tensor_batch['response_texts']),
+                "env_feedback": {
+                    "next_obs": deepcopy(next_obs),
+                    "rewards": deepcopy(rewards.tolist() if hasattr(rewards, 'tolist') else rewards),
+                    "dones": deepcopy(dones.tolist() if hasattr(dones, 'tolist') else dones),
+                    "infos": deepcopy(infos)
+                }
             })
             # ===============================================
-
-            text_actions = np.array(batch_output.non_tensor_batch['response_texts'], dtype=object)
-            
-            next_obs, rewards, dones, infos = envs.step(text_actions)
 
             if len(rewards.shape) == 2:
                 rewards = rewards.squeeze(1)
@@ -417,7 +448,7 @@ class TrajectoryCollector:
             obs = next_obs
 
             # Break if all environments are done
-            if is_done.all():
+            if is_done.all(): #只有全部done才break
                 break
 
         metrics_dict = {
