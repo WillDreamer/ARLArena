@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(5 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -15,17 +15,17 @@ cd /data1/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=256
+TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
+VAL_BEFORE_TRAIN=True
 MAX_PROMPT_LENGTH=4096
 MAX_RESPONSE_LENGTH=4096
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=256
+PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("/data1/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/data1/xw27/agent/ARLArena/datasets/deepscaler/train")
@@ -33,13 +33,13 @@ VALID_DATASET=("/data1/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/dat
 ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
+REMOVE_EXTRA_VOID_TURN=False
 MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=False #mask for now
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
 REJECTION_SAMPLE=False
-REMOVE_EXTRA_VOID_TURN=False
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_bs256_mbs256_lr1e-6
+RUN_NAME=math_p4096_r4096_n8_4B_Base_cispo_bs512_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -198,6 +198,7 @@ while [[ "$#" -gt 0 ]]; do
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
     --output_acc_to_file) OUTPUT_ACC_TO_FILE="$2"; shift 2 ;;
+    --remove_extra_void_turn) REMOVE_EXTRA_VOID_TURN="$2"; shift 2 ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -222,8 +223,8 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-# PORT=1376
-# DASHBOARD_PORT=1377
+PORT=1378
+DASHBOARD_PORT=1379
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -246,7 +247,7 @@ echo "grad clip: $GRAD_CLIP"
 echo "Actor Learning Rate: $ACTOR_LR"
 echo "balance batch: $BALANCE_BATCH"
 echo "Oversample Multiplier: $OVERSAMPLE"
-
+echo "Remove Extra Void Turn: $REMOVE_EXTRA_VOID_TURN"
 # set ppo micro token
 PPO_MICRO_TOKEN=$(generate_model_micro_token "$MODEL_NAME")
 echo "PPO_MICRO_TOKEN: $PPO_MICRO_TOKEN"
@@ -309,7 +310,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=grpo \
+    algorithm.adv_estimator=cispo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \

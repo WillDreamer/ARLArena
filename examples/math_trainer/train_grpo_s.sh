@@ -15,13 +15,13 @@ cd /data1/xw27/agent/ARLArena
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=128
+TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=False
+VAL_BEFORE_TRAIN=True
 MAX_PROMPT_LENGTH=4096
 MAX_RESPONSE_LENGTH=4096
 MAX_OBS_LENGTH=256
@@ -33,7 +33,7 @@ VALID_DATASET=("/data1/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/dat
 ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-REMOVE_EXTRA_VOID_TURN=True
+REMOVE_EXTRA_VOID_TURN=False
 MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r8192_n8_4B_Base_grpo_dynamic_removeclip_temp1.0
+RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_bs512_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
