@@ -52,7 +52,7 @@ python3 -m examples.data_preprocess.prepare \
     --val_data_size $val_data_size
 
 # for seed in 0 42 33
-for seed in 0
+for seed in 42
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
