@@ -31,6 +31,6 @@
 # echo "Starting next job..."
 # bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_cispo.sh
 
-bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_dapo.sh
-bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_gspo.sh
-bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_sapo.sh
+bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_seq_mask.sh
+
+bash /data1/xw27/agent/ARLArena/examples/math_trainer/train_grpo_s_format_mask.sh

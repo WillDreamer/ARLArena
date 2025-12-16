@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_4B_Base_seq_mask_newF_bs512_mbs128_lr1e-6
+RUN_NAME=math_p4096_r4096_n8_4B_Base_seq_mask_delta-0.223_bs512_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME

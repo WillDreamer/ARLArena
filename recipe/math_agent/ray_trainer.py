@@ -758,7 +758,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
 
         train_batch_size = self.config.data.train_batch_size
         # rejection sampling or remove clipped length both require a larger batch size in prior
-        if self.config.trainer.rejection_sample or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn:
+        if self.config.trainer.rejection_sample or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn_filter:
             train_batch_size *= self.config.trainer.oversample_multiplier
             # round train_batch_size to the multipler of world size
             world_size = (
@@ -1641,7 +1641,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                     traj_mask = batch.batch["response_mask"].reshape(-1, self.config.actor_rollout_ref.rollout.n)
                                     
                                     #* newly added about removing extra void turn
-                                    if self.config.trainer.remove_extra_void_turn:
+                                    if self.config.trainer.remove_extra_void_turn_filter:
                                         valid_traj_mask = traj_mask.sum(axis=1) > 0  # (num_trajs_for_uid,)
                                         num_valid_trajs = valid_traj_mask.sum().item()
                                         
@@ -1671,7 +1671,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
 
                         if (
                             self.config.trainer.rejection_sample
-                            or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn
+                            or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn_filter
                         ):
                             # If no valid samples remain, skip this batch and get a new one
                             print(f"valid_mask: {valid_mask}")

@@ -1524,7 +1524,7 @@ def compute_policy_loss_sapo(
     low = ((ratio < lower_band) & (advantages < 0)).float()
 
     pg_clipfrac = verl_F.masked_mean((high + low).clamp(max=1.0), response_mask)       # fraction clipped (either high or low)
-    pg_clipfrac_lower = verl_F.masked_mean(low, response_mask)  # "too low" ratio fraction
+    pg_clipfrac_lower = torch.tensor(0.0, device=pg_loss.device)
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
@@ -1626,7 +1626,7 @@ def compute_policy_loss_cispo(
     low = ((ratio < lower_band) & (advantages < 0)).float()
 
     pg_clipfrac = verl_F.masked_mean((high + low).clamp(max=1.0), response_mask)       # fraction clipped (either high or low)
-    pg_clipfrac_lower = verl_F.masked_mean(low, response_mask)  # "too low" ratio fraction
+    pg_clipfrac_lower = torch.tensor(0.0, device=pg_loss.device)
     
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
@@ -1707,8 +1707,8 @@ def compute_policy_loss_mask(
     cliprange_high = clip_ratio_high
 
     # ---- Token-level ratios r_i,t = exp(log π_new - log π_old) ----
-    # negative_approx_kl =  old_log_prob  - log_prob # log r
-    negative_approx_kl = log_prob - old_log_prob
+    negative_approx_kl =  old_log_prob  - log_prob # log r
+    # negative_approx_kl = log_prob - old_log_prob
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
@@ -1726,7 +1726,7 @@ def compute_policy_loss_mask(
     seq_log_ratio_mean = (negative_approx_kl * mask_f).sum(dim=-1) / seq_lengths  # mean of log_ratio
 
     # Threshold δ: mask negative-adv sequences whose mean ratio is too large
-    delta = getattr(config, "seq_mask_delta", 1.28)
+    delta = getattr(config, "seq_mask_delta", -0.223)
 
     neg_adv = adv_seq < 0
     high_ratio = seq_log_ratio_mean > delta
@@ -1734,7 +1734,7 @@ def compute_policy_loss_mask(
 
     keep_seq = ~reject_seq                    # (B,)
     keep_seq_mask = keep_seq.unsqueeze(-1)    # (B, 1)
-
+    print(f"keep_seq_mask: {keep_seq_mask.sum()}")
     # Effective token mask: response tokens AND sequence is kept
     effective_mask = response_mask.bool() & keep_seq_mask
     effective_mask_f = effective_mask.float()
