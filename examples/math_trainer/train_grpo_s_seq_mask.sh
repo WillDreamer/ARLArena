@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -55,11 +55,11 @@ OUTPUT_ACC_TO_FILE=False
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=True
+RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_4B_Base_cispo_bs512_mbs128_lr1e-6
+RUN_NAME=math_p4096_r4096_n8_4B_Base_seq_mask_newF_bs512_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -223,13 +223,14 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1378
-DASHBOARD_PORT=1379
+PORT=3333
+DASHBOARD_PORT=3334
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
 
-
+export RAY_ADDRESS="127.0.0.1:${PORT}"
+echo "RAY_ADDRESS=$RAY_ADDRESS"
 
 echo "RUN_NAME: $RUN_NAME"
 echo "LOG_FILE_PATH: $LOG_FILE_PATH"
@@ -310,7 +311,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=cispo \
+    algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
@@ -327,6 +328,7 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$SP_SIZE \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_update=False \
+    actor_rollout_ref.actor.policy_loss.loss_mode="seq_mask" \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=$LOG_PROB_MICRO_TOKEN \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE \
     actor_rollout_ref.rollout.gpu_memory_utilization=$ROLLOUT_GPU_MEMORY_UTIL \

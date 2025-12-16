@@ -119,7 +119,7 @@ python -m recipe.math_agent_async.servers.serve --host $host --port $port --tool
 server_pid=$!
 
 
-export RAY_OVERRIDE_RESOURCES='{"num_cpus":64,"num_gpus":'${NUM_GPUS}'}'
+# export RAY_OVERRIDE_RESOURCES='{"num_cpus":64,"num_gpus":'${NUM_GPUS}'}'
 PYTHONUNBUFFERED=1 python3 -m recipe.math_agent_async.trainer.main_ppo \
     algorithm.adv_estimator=$rl_alg \
     data.train_files=$train_data \
