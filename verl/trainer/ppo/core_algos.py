@@ -1707,8 +1707,8 @@ def compute_policy_loss_mask(
     cliprange_high = clip_ratio_high
 
     # ---- Token-level ratios r_i,t = exp(log π_new - log π_old) ----
-    negative_approx_kl =  old_log_prob  - log_prob # log r
-    # negative_approx_kl = log_prob - old_log_prob
+    # negative_approx_kl =  old_log_prob  - log_prob # log r
+    negative_approx_kl = log_prob - old_log_prob
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
@@ -1723,10 +1723,10 @@ def compute_policy_loss_mask(
     adv_seq = (advantages * mask_f).sum(dim=-1) / seq_lengths      # (B,)
 
     # Sequence-level mean importance ratio
-    seq_log_ratio_mean = (negative_approx_kl * mask_f).sum(dim=-1) / seq_lengths  # mean of log_ratio
+    seq_log_ratio_mean = (-negative_approx_kl * mask_f).sum(dim=-1) / seq_lengths  # mean of log_ratio
 
     # Threshold δ: mask negative-adv sequences whose mean ratio is too large
-    delta = getattr(config, "seq_mask_delta", -0.223)
+    delta = getattr(config, "seq_mask_delta", 0.223)
 
     neg_adv = adv_seq < 0
     high_ratio = seq_log_ratio_mean > delta

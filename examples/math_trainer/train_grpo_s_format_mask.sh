@@ -224,13 +224,14 @@ export TMPDIR="$RAY_TMP"
 # fi
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1001
-DASHBOARD_PORT=1003
+PORT=1100
+DASHBOARD_PORT=1101
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
 
-
+export RAY_ADDRESS="127.0.0.1:${PORT}"
+echo "RAY_ADDRESS=$RAY_ADDRESS"
 
 echo "RUN_NAME: $RUN_NAME"
 echo "LOG_FILE_PATH: $LOG_FILE_PATH"
