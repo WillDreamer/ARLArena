@@ -23,6 +23,7 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
     action_pools: the list of action pools, each pool is a list of strings.
     """
 
+    format_valids = [0] * len(actions)
     valids = [0] * len(actions)
 
     for i in range(len(actions)):
@@ -44,7 +45,7 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
             extracted_action = actions[i][start_idx + len(start_tag):end_idx].strip().lower()
             
             actions[i] = extracted_action
-            valids[i] = 1
+            format_valids[i] = 1
 
         except:
             actions[i] = actions[i][-30:]
@@ -53,10 +54,19 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
         think_start_idx = original_str.find("<think>")
         think_end_idx = original_str.find("</think>")
         if think_start_idx == -1 or think_end_idx == -1:
-            valids[i] = 0
+            format_valids[i] = 0
 
         # check if contains any Chinese characters
         if re.search(r'[\u4e00-\u9fff]', original_str):
-            valids[i] = 0
+            format_valids[i] = 0
 
-    return actions, valids
+        # check if action is in action_pools
+        if format_valids[i] == 1 and action_pools and i < len(action_pools):
+            if actions[i] in action_pools[i]:
+                valids[i] = 1
+            else:
+                valids[i] = 0
+        else:
+            valids[i] = format_valids[i]
+
+    return actions, valids, format_valids
