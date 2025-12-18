@@ -41,6 +41,7 @@ mkdir -p datasets/deepscaler
 wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
 wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
 
+
 # python3 -m uv pip install -e ".[sglang]"
 python3 -m uv pip install -e ".[vllm]"
 pip install --no-deps -e .
