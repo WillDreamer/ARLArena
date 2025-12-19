@@ -1,6 +1,12 @@
 
 import sys
 import os
+import io
+import base64
+from typing import List, Dict
+
+from PIL import Image
+
 # Add project root to Python path so we can import recipe modules
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
@@ -12,7 +18,6 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from verl import DataProto
 import hydra
 import time
-from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from torchdata.stateful_dataloader import StatefulDataLoader
 from recipe.game_agent.llm_agent.agent_proxy import VllmWrapperWg
@@ -20,7 +25,33 @@ from agent_system.multi_turn_rollout.rollout_loop_eval import TrajectoryCollecto
 from agent_system.environments import make_envs
 from verl.utils import hf_processor
 from recipe.game_agent.main_game_agent import create_rl_dataset, create_rl_sampler
+from recipe.game_agent.main_game_agent import create_rl_dataset, create_rl_sampler
         
+
+def _serialize_image_for_json(image_obj):
+    """
+    将单个图像对象序列化为 JSON 友好的格式。
+    目前使用 PNG + base64 编码的方式，后续 SFT 构造数据集时可以再解码为 PIL.Image。
+    """
+    if image_obj is None:
+        return None
+
+    # 如果是 numpy / tensor，需要先转为 PIL.Image；这里尽量鲁棒一些
+    if not isinstance(image_obj, Image.Image):
+        try:
+            # 尝试用 PIL 直接构造
+            image_obj = Image.fromarray(image_obj)
+        except Exception:
+            # 兜底：无法识别的类型，直接返回 None，避免破坏 JSON
+            return None
+
+    buffer = io.BytesIO()
+    image_obj.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return {
+        "format": "png_base64",
+        "data": encoded,
+    }
 
 @hydra.main(version_base=None, config_path="config", config_name="base_eval")
 def main(config):
@@ -31,7 +62,6 @@ def main(config):
     print(config.data)
     tokenizer = AutoTokenizer.from_pretrained(config.actor_rollout_ref.model.path)
     actor_wg = VllmWrapperWg(config, tokenizer)
-    
     envs, val_envs = make_envs(config)
     processor = hf_processor(config.actor_rollout_ref.model.path, trust_remote_code=True, use_fast=True)
 
@@ -111,6 +141,8 @@ def main(config):
             if success_keys:
                 task_scores = result['success'].get(success_keys[0], None)
         response_texts = result['step_io_history']
+        print(f"task_scores.length: {len(task_scores)}")
+        print(f"response_texts.length: {len(response_texts)}")
 
         if task_scores is not None and response_texts is not None:
             import json
@@ -121,23 +153,33 @@ def main(config):
                 if score is not None and score > 0.9:
                     turns = []
                     # response_texts为每轮list，每轮包含该batch（n）的信息
+                    # Extract image from the first turn (all turns share the same image for each sample)
+                    image_serialized = None
+                    if response_texts and len(response_texts) > 0:
+                        first_turn = response_texts[0]
+                        if "image" in first_turn and first_turn["image"] is not None:
+                            print(f"sample_idx: {sample_idx}")
+                            img_obj = response_texts[sample_idx]["image"]
+                            image_serialized = _serialize_image_for_json(img_obj)
+                    
                     for turn in response_texts:
                         # turn['inputs']和turn['outputs']都是n个sample
                         turn_result = {
                             "step": turn.get('step', None),
                             "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
-                            "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None
+                            "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None,
                         }
                         turns.append(turn_result)
                     all_turns.append({
                         "sample_idx": sample_idx,
                         "task_score": score,
-                        "turns": turns
+                        "turns": turns,
+                        "image": image_serialized  # Serialized image for the entire conversation
                     })
 
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(all_turns, f, ensure_ascii=False, indent=2)
-            print(f"Saved all {len(all_turns)} turns of the multi-turn dialogue to {output_path}")
+            print(f"Saved all {len(all_turns)} turns of the multi-turn dialogue (with images if available) to {output_path}")
         
         end_time = time.time()
         print(f'rollout time: {end_time - start_time} seconds')

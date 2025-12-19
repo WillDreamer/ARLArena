@@ -312,7 +312,95 @@ def ulysses_flash_attn_forward(
 
     # Because the input can be padded, the absolute sequence length depends on the max position id.
     if position_embeddings is None:
+        # Fix position_ids sequence length to match query_states
+        # Qwen2VLRotaryEmbedding expects position_ids shape: (3, batch_size, seq_len)
+        # It uses position_ids.shape[1] for batch_size and position_ids.shape[-1] for seq_len
+        if position_ids is not None and position_ids.dim() == 3:
+            # position_ids shape: (3, batch_size, seq_len) or (3, seq_len)
+            # If shape is (3, seq_len), we need to add batch dimension
+            if position_ids.shape[1] != bsz and position_ids.shape[1] != 1:
+                # This is (3, seq_len), need to add batch dimension: (3, 1, seq_len)
+                position_ids = position_ids.unsqueeze(1)  # (3, 1, seq_len)
+            
+            pos_seq_len = position_ids.shape[-1]
+            if pos_seq_len != full_q_len:
+                # Adjust position_ids to match query_states sequence length
+                if pos_seq_len > full_q_len:
+                    # Truncate if too long
+                    position_ids = position_ids[..., :full_q_len]
+                else:
+                    # Pad if too short - repeat the last position
+                    last_pos = position_ids[..., -1:]  # (3, batch_size, 1)
+                    pad_size = full_q_len - pos_seq_len
+                    position_ids = torch.cat([position_ids, last_pos.expand(-1, -1, pad_size)], dim=-1)
+                
+                # Clamp position_ids values to valid range
+                position_ids = torch.clamp(position_ids, min=0, max=full_q_len - 1)
+                
+                # Debug: log the fix (only log once to avoid spam)
+                import logging
+                logger = logging.getLogger(__name__)
+                if not hasattr(self, '_position_ids_fix_logged'):
+                    logger.warning(
+                        f"Fixed position_ids sequence length from {pos_seq_len} to {full_q_len} "
+                        f"to match query_states. position_ids shape: {position_ids.shape}, "
+                        f"query_states shape: {query_states.shape}, full_q_len: {full_q_len}"
+                    )
+                    self._position_ids_fix_logged = True
+        
         cos, sin = self.rotary_emb(value_states, position_ids)
+        
+        # CRITICAL FIX: Ensure cos/sin sequence length matches query_states
+        # rotary_emb uses position_ids.shape[-1] to determine sequence length,
+        # but after Ulysses SP and other processing, the actual sequence length may differ
+        # cos/sin shape from rotary_emb: (3, batch_size, seq_len, head_dim)
+        # We need seq_len to match full_q_len (query_states sequence length)
+        # ALWAYS check and fix - this is a known issue with Ulysses SP
+        cos_seq_len = cos.shape[2]
+        sin_seq_len = sin.shape[2]
+        
+        if cos_seq_len != full_q_len or sin_seq_len != full_q_len:
+            import logging
+            logger = logging.getLogger(__name__)
+            if not hasattr(self, '_cos_sin_fix_logged'):
+                logger.warning(
+                    f"cos/sin sequence length mismatch! cos.shape: {cos.shape}, sin.shape: {sin.shape}, "
+                    f"query_states.shape: {query_states.shape}, full_q_len: {full_q_len}, "
+                    f"position_ids.shape: {position_ids.shape if position_ids is not None else None}. "
+                    f"Fixing cos/sin sequence length to {full_q_len}..."
+                )
+                self._cos_sin_fix_logged = True
+            
+            # Force truncate/pad cos/sin to match query_states
+            if cos_seq_len > full_q_len:
+                # Truncate if too long - take first full_q_len positions
+                cos = cos[:, :, :full_q_len, :]
+                sin = sin[:, :, :full_q_len, :]
+            elif cos_seq_len < full_q_len:
+                # Pad if too short - repeat the last position's cos/sin
+                last_cos = cos[:, :, -1:, :]  # (3, batch_size, 1, head_dim)
+                last_sin = sin[:, :, -1:, :]
+                pad_size = full_q_len - cos_seq_len
+                cos = torch.cat([cos, last_cos.expand(-1, -1, pad_size, -1)], dim=2)
+                sin = torch.cat([sin, last_sin.expand(-1, -1, pad_size, -1)], dim=2)
+            
+            # Verify the fix
+            assert cos.shape[2] == full_q_len, (
+                f"After fix: cos sequence length ({cos.shape[2]}) != full_q_len ({full_q_len})"
+            )
+            assert sin.shape[2] == full_q_len, (
+                f"After fix: sin sequence length ({sin.shape[2]}) != full_q_len ({full_q_len})"
+            )
+        
+        # Final verification before passing to apply_multimodal_rotary_pos_emb
+        assert cos.shape[2] == full_q_len, (
+            f"Before apply_multimodal_rotary_pos_emb: cos sequence length ({cos.shape[2]}) != full_q_len ({full_q_len}), "
+            f"cos.shape: {cos.shape}, query_states.shape: {query_states.shape}"
+        )
+        assert sin.shape[2] == full_q_len, (
+            f"Before apply_multimodal_rotary_pos_emb: sin sequence length ({sin.shape[2]}) != full_q_len ({full_q_len}), "
+            f"sin.shape: {sin.shape}, query_states.shape: {query_states.shape}"
+        )
     else:
         cos, sin = position_embeddings
 

@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
 export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
@@ -19,16 +19,16 @@ NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
 train_data_size=32
-val_data_size=256
+val_data_size=600
 group_size=8
 
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+MODEL=Qwen/Qwen2.5-VL-3B-Instruct  # TODO: can I use stronger model like Qwen3-VL-7B-Instruct?
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_basline"
-estimator="grpo"
+estimator="grpo"  # TODO: can I use stronger estimator like gigpo?
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -50,9 +50,9 @@ fi
 # fi
 
 
-# PORT=$(( ( RANDOM % 999 ) + 1001 ))
-# DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
-# ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
+PORT=$(( ( RANDOM % 999 ) + 1001 ))
+DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
+ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
@@ -81,7 +81,8 @@ python3 -m recipe.game_agent.eval_game_agent \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
-    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -121,6 +122,6 @@ python3 -m recipe.game_agent.eval_game_agent \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
     trainer.val_before_train=False "$@" \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
+    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/SFT/$experiment_name \
     critic.model.path=$Critic_MODEL \
     algorithm.filter_groups.enable=True

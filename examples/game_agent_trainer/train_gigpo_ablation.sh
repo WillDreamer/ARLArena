@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(5)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
 export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
@@ -28,15 +28,15 @@ mode="mean_std_norm"
 # ========== 模型配置 ==========
 # 使用合并后的模型作为初始模型
 # 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
-MERGED_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-merged"  # 你的合并后模型路径，或 HuggingFace ID
-MODEL=${MERGED_MODEL}  # 使用合并后的模型
+# MERGED_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-merged"  # 你的合并后模型路径，或 HuggingFace ID
+# MODEL=${MERGED_MODEL}  # 使用合并后的模型
 
 # 原始 base model（如果需要的话）
-# MODEL=Qwen/Qwen3-VL-4B-Instruct
+MODEL=Qwen/Qwen3-VL-4B-Instruct
 
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
-project_name="verl_agent_sokoban_sft_gigpo"
+project_name="verl_agent_sokoban_grpo_debug"
 estimator="grpo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
@@ -94,7 +94,8 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
-    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -133,9 +134,9 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.save_freq=10 \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=150 \
+    trainer.total_epochs=1000 \
     trainer.val_before_train=False "$@" \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name \
+    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
     critic.model.path=$Critic_MODEL \
     algorithm.filter_groups.enable=True
     trainer.val_before_train=False "$@" \

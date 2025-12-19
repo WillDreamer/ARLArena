@@ -106,7 +106,6 @@ class SokobanEnv(BaseDiscreteActionEnv, GymSokobanEnv):
 
     def render(self, mode):
         assert mode in ['tiny_rgb_array', 'list', 'state', 'rgb_array']
-
         if mode == 'rgb_array':
             img = self.get_image(mode, scale=1) # numpy array
             return img

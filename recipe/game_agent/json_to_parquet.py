@@ -54,12 +54,14 @@ def main():
     parser.add_argument(
         "input_dir",
         type=str,
-        help="Input directory containing JSON files"
+        help="Input directory containing JSON files",
+        default="/data1/dannie/projects/ARLArena/high_score_multiturn_texts_seed0.json"
     )
     parser.add_argument(
         "output_dir",
         type=str,
-        help="Output directory for Parquet files"
+        help="Output directory for Parquet files",
+        default="/home/dannie/data/sft/1217/train.parquet"
     )
     
     args = parser.parse_args()
