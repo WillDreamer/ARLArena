@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,7 +20,7 @@ val_data_size=128
 group_size=8
 mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=willamazon1/Qwen3-4B-rft-alfworld
 MODEL_SHORT="${MODEL##*/}"
 estimator="grpo"
 project_name="alfworld"
@@ -72,7 +72,7 @@ do
         actor_rollout_ref.actor.optim.lr=1e-6 \
         actor_rollout_ref.model.use_remove_padding=True \
         actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
+        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
         actor_rollout_ref.actor.use_kl_loss=True \
         actor_rollout_ref.actor.kl_loss_update=False \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
