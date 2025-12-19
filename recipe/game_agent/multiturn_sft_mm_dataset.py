@@ -376,7 +376,21 @@ class MultiTurnSFTDataset(Dataset):
             # Handle both list and single image cases
             if not isinstance(image_data, list):
                 image_data = [image_data]
-            images = [process_image(image) for image in image_data]
+            
+            # Convert base64 format to process_image-compatible format
+            processed_images = []
+            for img in image_data:
+                if isinstance(img, dict):
+                    # Handle base64 format from JSON: {"format": "png_base64", "data": "base64_string"}
+                    if img.get("format") == "png_base64" and "data" in img:
+                        import base64
+                        from io import BytesIO
+                        # Decode base64 to bytes
+                        image_bytes = base64.b64decode(img["data"])
+                        # Convert to process_image-compatible format: {"bytes": bytes}
+                        img = {"bytes": image_bytes}
+                processed_images.append(process_image(img))
+            images = processed_images
 
         videos = None
         if self.video_key in row_dict and row_dict.get(self.video_key, None) is not None:

@@ -295,6 +295,8 @@ class TrajectoryCollector:
 
         # Initial observations from the environment
         obs, infos = envs.reset(kwargs=gen_batch.non_tensor_batch.pop('env_kwargs', None))
+        # Save initial images for the entire trajectory (each sample has one image for all turns)
+        image_saved = obs.get('image', None)
 
         lenght_obs = len(obs['text']) if obs['text'] is not None else len(obs['image'])
         assert len(gen_batch.batch) == lenght_obs, f"gen_batch size {len(gen_batch.batch)} does not match obs size {lenght_obs}"
@@ -338,8 +340,21 @@ class TrajectoryCollector:
 
             batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
             non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
+            
+            # Save multi_modal_data before popping if it exists (for step_io_history)
+            images_per_sample = None
             if "multi_modal_data" in batch.non_tensor_batch:
+                # Extract images before popping: multi_modal_data is a list of dicts, each dict has 'image' key
+                multi_modal_data_list = batch.non_tensor_batch["multi_modal_data"]
+                images_per_sample = []
+                for mm_data in multi_modal_data_list:
+                    if isinstance(mm_data, dict) and "image" in mm_data:
+                        # mm_data["image"] is a list of PIL Images
+                        images_per_sample.append(mm_data["image"])
+                    else:
+                        images_per_sample.append(None)
                 non_tensor_batch_keys_to_pop.append("multi_modal_data")
+            
             if "raw_prompt" in batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("raw_prompt")
             if "tools_kwargs" in batch.non_tensor_batch:
@@ -350,7 +365,6 @@ class TrajectoryCollector:
             )
 
             batch_input.meta_info = gen_batch.meta_info
-
             # pad to be divisible by dp_size
             batch_input_padded, pad_size = pad_dataproto_to_divisor(batch_input, 8)
             # batch_output_padded, interaction_history = actor_rollout_wg.generate_sequences(batch_input_padded)
@@ -381,11 +395,15 @@ class TrajectoryCollector:
             # ====== 记录当前step的inputs/outputs ==============
             # 这里保存batch_input和batch_output的DataProto实例的deepcopy(Small batches，deepcopy不大)
             from copy import deepcopy
-            step_io_history.append({
+            step_record = {
                 "step": _step,
-                "inputs": deepcopy(batch_input.non_tensor_batch['raw_prompt']),
-                "outputs": deepcopy(batch_output.non_tensor_batch['response_texts'])
-            })
+                "inputs": deepcopy(batch_input.non_tensor_batch.get('raw_prompt', None)),
+                "outputs": deepcopy(batch_output.non_tensor_batch.get('response_texts', None))
+            }
+            # Add images if available (for this step, though they're usually the same across steps)
+            if images_per_sample is not None:
+                step_record["image"] = deepcopy(images_per_sample)
+            step_io_history.append(step_record)
             # ===============================================
 
             text_actions = np.array(batch_output.non_tensor_batch['response_texts'], dtype=object)
