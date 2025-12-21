@@ -14,7 +14,7 @@ from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from torchdata.stateful_dataloader import StatefulDataLoader
 #from recipe.shop_agent.llm_agent.agent_proxy import VllmWrapperWg
-from recipe.shop_agent.llm_agent.agent_proxy import ApiCallingWrapperWg
+from recipe.shop_agent.llm_agent.agent_proxy import ApiCallingWrapperWg, ApiCallingWrapperWg_MAS, ApiCallingWrapperWg_Mixture, ApiCallingWrapperWg_Sequential
 from agent_system.multi_turn_rollout.rollout_loop_eval import TrajectoryCollector
 from agent_system.environments import make_envs
 from verl.utils import hf_processor
@@ -50,7 +50,7 @@ def safe_load_tokenizer(model_path: str):
 
 
 
-@hydra.main(version_base=None, config_path="config", config_name="base_eval")
+@hydra.main(version_base=None, config_path="config", config_name="base_eval") # base_eval
 def main(config):
     # detect config name from python -m webshop.llm_agent.agent_proxy --config_name frozen_lake
     # os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -62,18 +62,23 @@ def main(config):
     
     tokenizer = safe_load_tokenizer(config.actor_rollout_ref.model.path)
     
-    actor_wg = ApiCallingWrapperWg(config, tokenizer)
+    actor_wg = ApiCallingWrapperWg_MAS(config, tokenizer)
+    # actor_wg = ApiCallingWrapperWg_Mixture(config, tokenizer)
+    # actor_wg = ApiCallingWrapperWg_Sequential(config, tokenizer)
+    
     
     
     envs, val_envs = make_envs(config)
     processor = hf_processor(config.actor_rollout_ref.model.path, trust_remote_code=True, use_fast=True)
 
     traj_collector = TrajectoryCollector(config=config, tokenizer=tokenizer, processor=processor)
-    
-    train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor)
+    print("111")
+    # train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor)
+    print("222")
     val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor)
+    print("333")
     
-    train_sampler = create_rl_sampler(config.data, train_dataset)
+    # train_sampler = create_rl_sampler(config.data, train_dataset)
     from verl.utils.dataset.rl_dataset import collate_fn
 
     # val_dataloader = StatefulDataLoader(
@@ -83,10 +88,11 @@ def main(config):
     #         drop_last=True,
     #         collate_fn=collate_fn,
     #         sampler=train_sampler)
+    print("444")
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=64,
+            batch_size=8,
             num_workers=2,
             shuffle=True,
             drop_last=False,
@@ -94,6 +100,7 @@ def main(config):
         )
     
     #测试数据的load
+    print(f"val_dataloader: {len(val_dataloader)}")
     for test_data in val_dataloader:
         
         test_batch = DataProto.from_single_dict(test_data)
@@ -151,39 +158,52 @@ def main(config):
         except Exception as exc:
             print(f"Warning: failed to save evaluation result to {snapshot_path}: {exc}")
 
-        # 提取success['webshop_task_score']大于0.8对应的response_texts，并保存
         task_scores = result['success'].get('webshop_task_score (not success_rate)', None)
         response_texts = result['step_io_history']
 
         if task_scores is not None and response_texts is not None:
             import json
-            output_path = f'high_score_multiturn_texts_seed{config.env.seed}.json'
-            # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
-            all_turns = []
-            for sample_idx, score in enumerate(task_scores):
-                if score is not None:
-                    turns = []
-                    # response_texts为每轮list，每轮包含该batch（n）的信息
-                    for turn in response_texts:
-                        # turn['inputs']和turn['outputs']都是n个sample
-                        turn_result = {
-                            "step": turn.get('step', None),
-                            "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
-                            "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None
-                        }
-                        turns.append(turn_result)
-                    all_turns.append({
-                        "sample_idx": sample_idx,
-                        "task_score": score,
-                        "turns": turns
-                    })
+            
+            # Create a specific directory to hold these separate files
+            traj_save_dir = Path(f"outputs_webshop/trajectories_seed{config.env.seed}_{timestamp}")
+            traj_save_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Saving individual trajectories to: {traj_save_dir}")
 
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(all_turns, f, ensure_ascii=False, indent=2)
-            print(f"Saved all {len(all_turns)} turns of the multi-turn dialogue to {output_path}")
-        
+            for sample_idx, score in enumerate(task_scores):
+                
+                # CORRECTION: 
+                # response_texts[sample_idx] is already the clean, truncated list of dicts 
+                # for this specific sample (from the post-processing in the previous function).
+                # We can use it directly.
+                sample_turns = response_texts[sample_idx]
+
+                # Construct the data object for this single file
+                single_traj_data = {
+                    "sample_idx": sample_idx,
+                    "task_score": float(score) if score is not None else 0.0,
+                    "turns": sample_turns
+                }
+
+                # Generate a unique filename for this sample
+                file_name = f"traj_sample_{sample_idx}.json"
+                file_path = traj_save_dir / file_name
+                
+                # Write individual file
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(single_traj_data, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    print(f"Error saving sample {sample_idx}: {e}")
+
+            print(f"Finished saving {len(task_scores)} separate trajectory files.")
+
+
+
         end_time = time.time()
         print(f'rollout time: {end_time - start_time} seconds')
+
+
+        break
 
 if __name__ == "__main__":
     main()
