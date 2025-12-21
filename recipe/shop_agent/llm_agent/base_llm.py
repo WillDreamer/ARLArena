@@ -31,8 +31,13 @@ class LLMProvider:
 
 class OpenAIProvider(LLMProvider):
     """OpenAI API provider implementation"""
-    def __init__(self, model_name: str = "gpt-4o-mini", api_key: Optional[str] = None):
+    def __init__(self, model_name: str = "gpt-4o", api_key: Optional[str] = None):
         self.model_name = model_name
+
+        print("--------------------")
+        print(f"model_name: {model_name}")
+        print("--------------------")
+
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key not provided or missing in environment variables")
@@ -41,6 +46,10 @@ class OpenAIProvider(LLMProvider):
         print(f"[DEBUG] Using OpenAI model: {self.model_name}")
         print(f"[DEBUG] OPENAI_API_KEY prefix: {str(self.api_key)[:16] if self.api_key else None}")
 
+        import time
+        time.sleep(10)
+        # exit()
+
 
     async def generate(self, messages: List[Dict[str, str]], **kwargs) -> LLMResponse:
         response = await self.client.chat.completions.create(
@@ -48,6 +57,7 @@ class OpenAIProvider(LLMProvider):
             messages=messages,
             **kwargs
         )
+        # print(f"self.model_name: {self.model_name}")
         text = response.choices[0].message.content
         return LLMResponse(content=text, model_name=response.model)
 
@@ -76,6 +86,35 @@ class DeepSeekProvider(LLMProvider):
         return LLMResponse(content=text, model_name=response.model)
 
 
+# ===================== ✅ Moonshot (Kimi) Provider =====================
+class MoonshotProvider(LLMProvider):
+    """
+    Moonshot AI (Kimi) Provider
+    Docs: https://platform.moonshot.ai/docs
+    """
+    def __init__(self, model_name: str = "moonshot-v1-8k", api_key: Optional[str] = None):
+        self.model_name = model_name
+        self.api_key = api_key or os.environ.get("MOONSHOT_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("Moonshot API key not provided. Set MOONSHOT_API_KEY.")
+
+        # Moonshot uses a specific Base URL compatible with OpenAI SDK
+        self.client = AsyncOpenAI(
+            api_key=self.api_key, 
+            base_url="https://api.moonshot.ai/v1"
+        )
+        print(f"[DEBUG] Using Moonshot (Kimi) model: {self.model_name}")
+
+    async def generate(self, messages: List[Dict[str, str]], **kwargs) -> LLMResponse:
+        # Kimi sometimes requires specific handling for system messages or temperature
+        response = await self.client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            **kwargs
+        )
+        text = response.choices[0].message.content
+        return LLMResponse(content=text, model_name=response.model)
 
 
 # ===================== ⚙️ ConcurrentLLM =====================
@@ -98,6 +137,8 @@ class ConcurrentLLM:
                 self.provider = OpenAIProvider(model_name, api_key)
             elif p == "deepseek":
                 self.provider = DeepSeekProvider(model_name, api_key)
+            elif p in ["kimi", "moonshot"]:
+                self.provider = MoonshotProvider(model_name, api_key)
             else:
                 raise ValueError(f"Unknown provider: {provider}")
 
