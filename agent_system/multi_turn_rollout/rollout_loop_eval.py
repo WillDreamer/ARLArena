@@ -27,6 +27,9 @@ from agent_system.environments import EnvironmentManagerBase
 from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 
+import os
+import json
+
 def drop_timing(x):
     if "timing" in x.meta_info:
         mi = dict(x.meta_info)
@@ -308,8 +311,10 @@ class TrajectoryCollector:
             uid_batch = np.array([uid for _ in range(len(gen_batch.batch))], dtype=object)
         is_done = np.zeros(batch_size, dtype=bool)
         traj_uid = np.array([str(uuid.uuid4()) for _ in range(batch_size)], dtype=object)
+
         total_batch_list = [[] for _ in range(batch_size)]
         total_infos = [[] for _ in range(batch_size)]
+ 
         episode_lengths = np.zeros(batch_size, dtype=np.float32)
         episode_rewards = np.zeros(batch_size, dtype=np.float32)
         tool_callings = np.zeros(batch_size, dtype=np.float32)
@@ -327,7 +332,6 @@ class TrajectoryCollector:
 
         # Trajectory collection loop
         for _step in range(self.config.env.max_steps):
-
             active_masks = np.logical_not(is_done)
 
             batch = self.preprocess_batch(gen_batch=gen_batch, obs=obs)
@@ -349,9 +353,28 @@ class TrajectoryCollector:
 
             # pad to be divisible by dp_size
             batch_input_padded, pad_size = pad_dataproto_to_divisor(batch_input, 8)
-            batch_output_padded = actor_rollout_wg.generate_sequences(batch_input_padded)
+            batch_output_padded, interaction_history = actor_rollout_wg.generate_sequences(batch_input_padded)
             # # unpad
             batch_output = unpad_dataproto(batch_output_padded, pad_size=pad_size)
+
+            def _save_history_to_json(interaction_history):
+                """Saves the interaction history list to a JSON file."""
+                log_dir = f"interaction_history_step_{_step}"
+                os.makedirs(log_dir, exist_ok=True)
+
+                print(f"[INFO] Saving {len(interaction_history)} interaction logs to '{log_dir}'...")
+
+                for idx, history_item in enumerate(interaction_history):
+                    filename = f"log_{idx}.json"
+                    file_path = os.path.join(log_dir, filename)
+                    
+                    try:
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(history_item, f, ensure_ascii=False, indent=2)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to save history for item {idx}: {e}")
+
+            _save_history_to_json(interaction_history)
 
             # ====== 记录当前step的inputs/outputs ==============
             # 这里保存batch_input和batch_output的DataProto实例的deepcopy(Small batches，deepcopy不大)
@@ -366,6 +389,32 @@ class TrajectoryCollector:
             text_actions = np.array(batch_output.non_tensor_batch['response_texts'], dtype=object)
             
             next_obs, rewards, dones, infos = envs.step(text_actions)
+
+            # print(f"next_obs: {type(next_obs)}")
+            # print(f"next_obs: {next_obs.keys()}")
+            # print(f"next_obs: {type(next_obs['text'])}")
+            # print(f"next_obs: {type(next_obs['image'])}")
+            # print(f"next_obs: {type(next_obs['anchor'])}")
+
+            # print(f"next_obs['text']: {next_obs['text']} {len(next_obs['text'])}")
+            # print(f"next_obs['image']: {next_obs['image']}")
+            # print(f"next_obs['anchor']: {next_obs['anchor']} {len(next_obs['anchor'])}")
+
+            # print("------")
+            # print(f"rewards: {type(rewards)}")
+            # print(f"dones: {type(dones)}")
+            # print(f"infos: {type(infos)}")
+            # print("------")
+            # print(f"dones: {dones.shape}")
+            # print(f"dones: {dones}")
+            # print("------")
+            # print(f"rewards: {rewards.shape}")
+            # print(f"rewards: {rewards}")
+
+            print(f"step: {_step}, dones: {dones}, rewards: {rewards}")
+
+            # exit()
+            
 
             if len(rewards.shape) == 2:
                 rewards = rewards.squeeze(1)
@@ -408,8 +457,9 @@ class TrajectoryCollector:
             batch_list: list[dict] = to_list_of_dict_eval(batch)
 
             for i in range(batch_size):
-                total_batch_list[i].append(batch_list[i])
-                total_infos[i].append(infos[i])
+                if not is_done[i]:
+                    total_batch_list[i].append(batch_list[i])
+                    total_infos[i].append(infos[i])
             
             # Update done states
             is_done = np.logical_or(is_done, dones)
@@ -420,7 +470,29 @@ class TrajectoryCollector:
             # Break if all environments are done
             if is_done.all():
                 break
+
+        print(f"episode_lengths: {episode_lengths}")
+
+        print(f"step_io_history: {type(step_io_history)}")
+
+        organized_io_history = [[] for _ in range(batch_size)]
         
+        for step_data in step_io_history:
+            print(f"step_data: {type(step_data)}")
+            s_idx = step_data['step']
+            s_inputs = step_data['inputs']
+            s_outputs = step_data['outputs']
+            
+            for b_i in range(batch_size):
+                if s_idx < episode_lengths[b_i]:
+                    organized_io_history[b_i].append({
+                        "step": s_idx,
+                        "input": s_inputs[b_i],
+                        "output": s_outputs[b_i]
+                    })
+        
+        step_io_history = organized_io_history
+
         metrics_dict = {
             'title_score': title_score,
             'r_type': r_type,
@@ -430,6 +502,10 @@ class TrajectoryCollector:
             'w_option': w_option,
             'w_price': w_price
         }
+
+        for i in range(batch_size):
+            print(f"total_batch_list[{i}]: {len(total_batch_list[i])}")
+            print(f"total_infos[{i}]: {len(total_infos[i])}")
 
         success: Dict[str, np.ndarray] = envs.success_evaluator(
                     total_infos=total_infos,
@@ -447,6 +523,10 @@ class TrajectoryCollector:
             other_metric[key] = metric_mean
             if metric_mean == 0:
                 all_nonzero = False
+        
+        print(f"success_rate: {success_rate}")
+
+        # exit()
 
         # ========= 返回，以及保存每步的inputs/outputs ===========
         # batch_output 不唯一，最后一次的batch_output为最后一步action，可选返回step_io_history
