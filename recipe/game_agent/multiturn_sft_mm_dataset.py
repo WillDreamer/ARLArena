@@ -63,8 +63,8 @@ class MultiTurnSFTDataset(Dataset):
         self.enable_thinking_key = multiturn_config.get("enable_thinking_key", "enable_thinking")
         self.apply_chat_template_kwargs = config.get("apply_chat_template_kwargs", {})
         # Multimodal keys
-        self.image_key = config.get("image_key", "images")
-        self.video_key = config.get("video_key", "videos")
+        self.image_key = config.get("image_key", "image")
+        self.video_key = config.get("video_key", "video")
         self.return_multi_modal_inputs = config.get("return_multi_modal_inputs", True)
         assert self.truncation in ["error", "left", "right"]
 
@@ -190,6 +190,7 @@ class MultiTurnSFTDataset(Dataset):
 
         # Check if example has image_key or video_key (similar to rl_dataset)
         if self.image_key in example or self.video_key in example:
+            print("---------------------------------image_key or video_key in example---------------------------------")
             for message in messages:
                 content = message.get("content", "")
                 if isinstance(content, str):
@@ -391,7 +392,24 @@ class MultiTurnSFTDataset(Dataset):
                         img = {"bytes": image_bytes}
                 processed_images.append(process_image(img))
             images = processed_images
+        
+        # 在 __getitem__ 里，构造完 messages 和 images 之后，加一段：
+        num_image_tokens = 0
+        for m in messages:
+            c = m.get("content", "")
+            if isinstance(c, str):
+                num_image_tokens += c.count("<image>")
+            elif isinstance(c, list):
+                # 如果你前面把 string 转成了 [{"type": "image"}, {"type": "text", ...}] 之类，这里也可以数一下
+                num_image_tokens += sum(1 for x in c if isinstance(x, dict) and x.get("type") == "image")
 
+        if images is not None and num_image_tokens > 0:
+            if len(images) == 1 and num_image_tokens > 1:
+                # 把同一张图复制 num_image_tokens 份
+                images = images * num_image_tokens
+            elif len(images) != num_image_tokens:
+                raise ValueError(f"images number ({len(images)}) is not equal to <image> number ({num_image_tokens})")
+        
         videos = None
         if self.video_key in row_dict and row_dict.get(self.video_key, None) is not None:
             video_data = row_dict[self.video_key]

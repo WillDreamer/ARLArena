@@ -2,10 +2,10 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
-export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
+export RAY_TMPDIR="/home/ubuntu/ray_out/ray_$(date +%s)"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -16,11 +16,11 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
-echo "Detected ${NUM_GPUS} GPUs for this run"
+echo "Detected ${NUM_GPUS} GPUs for this run"  
 
-train_data_size=32
-val_data_size=600
-group_size=8
+train_data_size=256
+val_data_size=256
+ENV_SEED=0  # change the seed for multiple valid evaluations
 
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
@@ -93,10 +93,10 @@ python3 -m recipe.game_agent.eval_game_agent \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.99 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=True \
-    actor_rollout_ref.rollout.free_cache_engine=True \
+    actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
@@ -108,9 +108,9 @@ python3 -m recipe.game_agent.eval_game_agent \
     algorithm.gigpo.step_advantage_w=1.0 \
     algorithm.gigpo.mode=$mode \
     env.env_name=Sokoban \
-    env.seed=0 \
+    env.seed=$ENV_SEED \
     env.max_steps=15 \
-    env.rollout.n=$group_size \
+    env.rollout.n=1 \
     env.sokoban.mode='rgb_array' \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
@@ -122,6 +122,5 @@ python3 -m recipe.game_agent.eval_game_agent \
     trainer.test_freq=5 \
     trainer.total_epochs=150 \
     trainer.val_before_train=False "$@" \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/SFT/$experiment_name \
     critic.model.path=$Critic_MODEL \
     algorithm.filter_groups.enable=True

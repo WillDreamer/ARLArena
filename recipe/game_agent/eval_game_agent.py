@@ -83,7 +83,7 @@ def main(config):
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=256,
+            batch_size=config.data.val_batch_size,
             num_workers=8,
             shuffle=True,
             drop_last=False,
@@ -141,12 +141,12 @@ def main(config):
             if success_keys:
                 task_scores = result['success'].get(success_keys[0], None)
         response_texts = result['step_io_history']
-        print(f"task_scores.length: {len(task_scores)}")
-        print(f"response_texts.length: {len(response_texts)}")
+        # print(f"task_scores.length: {len(task_scores)}")
+        # print(f"response_texts.length: {len(response_texts)}")
 
         if task_scores is not None and response_texts is not None:
             import json
-            output_path = f'high_score_multiturn_texts_seed{config.env.seed}.json'
+            output_path = f'checkpoints/sft/high_score_multiturn_texts_seed{config.env.seed}.json'
             # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
             all_turns = []
             for sample_idx, score in enumerate(task_scores):
@@ -155,12 +155,12 @@ def main(config):
                     # response_texts为每轮list，每轮包含该batch（n）的信息
                     # Extract image from the first turn (all turns share the same image for each sample)
                     image_serialized = None
-                    if response_texts and len(response_texts) > 0:
-                        first_turn = response_texts[0]
-                        if "image" in first_turn and first_turn["image"] is not None:
-                            print(f"sample_idx: {sample_idx}")
-                            img_obj = response_texts[sample_idx]["image"]
-                            image_serialized = _serialize_image_for_json(img_obj)
+                    first_turn = response_texts[0]
+                    print(f"first_turn.keys: {first_turn.keys()}")
+                    if "image" in first_turn and first_turn["image"] is not None:
+                        img_obj = first_turn["image"][sample_idx]  # first_turn["image"]: list, length=256
+                        print(f"img_obj: {img_obj[0]}")
+                        image_serialized = _serialize_image_for_json(img_obj[0])
                     
                     for turn in response_texts:
                         # turn['inputs']和turn['outputs']都是n个sample
@@ -170,6 +170,7 @@ def main(config):
                             "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None,
                         }
                         turns.append(turn_result)
+
                     all_turns.append({
                         "sample_idx": sample_idx,
                         "task_score": score,
