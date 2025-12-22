@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
 log() { printf "\n\033[1;32m[+] %s\033[0m\n" "$*"; }
 warn() { printf "\033[1;33m[!] %s\033[0m\n" "$*"; }
@@ -46,6 +48,12 @@ python3 -m uv pip install gym==0.26.2
 python3 -m uv pip install gym_sokoban==0.0.6
 python3 -m uv pip install qwen_vl_utils
 python3 -m uv pip install ray==2.45.0
+
+pip install opentelemetry-api==1.26.0
+pip install opentelemetry-sdk==1.26.0
+pip install numpy==1.26.4
+pip install multiprocess==0.70.16
+pip install opencv-python-headless==4.11.0.86
 
 if command -v conda >/dev/null 2>&1; then
   conda activate agentrl_game || true
