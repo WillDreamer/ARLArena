@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -22,7 +22,7 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+estimator="grpo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
@@ -32,8 +32,8 @@ if pgrep -u "$USER" "ray" > /dev/null; then
     exit 1
 fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1110
-ray start --head --port $PORT --dashboard-port=1029
+PORT=1111
+ray start --head --port $PORT --dashboard-port=1030
 
 WANDB_API_KEY="272dc3566c3a3bff61862fe1de87fe2aa3582963" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,7 +54,6 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL"
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 

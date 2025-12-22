@@ -380,6 +380,11 @@ class TrajectoryCollector:
             else:
                 batch.non_tensor_batch['is_action_valid'] = np.ones(batch_size, dtype=bool)
 
+            if 'is_response_format_valid' in infos[0]:
+                batch.non_tensor_batch['is_response_format_valid'] = np.array([info['is_response_format_valid'] for info in infos], dtype=bool)
+            else:
+                batch.non_tensor_batch['is_response_format_valid'] = np.ones(batch_size, dtype=bool)
+
             if 'tool_calling' in infos[0]:
                 tool_callings[active_masks] += np.array([info['tool_calling'] for info in infos], dtype=np.float32)[active_masks]
             
