@@ -29,31 +29,31 @@ if [[ -z "${CONDA_BASE}" ]]; then
   exit 1
 fi
 
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
-conda create -n agentrl_search python==3.12 -y
-conda activate agentrl_search
-python3 -m pip install uv
-python3 -m uv pip install -e ".[vllm]"
-pip install --no-deps -e .
-python3 -m uv pip install flash-attn==2.8.3 --no-build-isolation --no-deps
-python3 -m uv pip install -r ./requirements.txt
-cd ./agent_system/environments/env_package/search/third_party
-pip install -e .
-pip install gym==0.26.2
-cd ../../../../../
+# source "${CONDA_BASE}/etc/profile.d/conda.sh"
+# conda create -n agentrl_search python==3.12 -y
+# conda activate agentrl_search
+# python3 -m pip install uv
+# python3 -m uv pip install -e ".[vllm]"
+# pip install --no-deps -e .
+# python3 -m uv pip install flash-attn==2.8.3 --no-build-isolation --no-deps
+# python3 -m uv pip install -r ./requirements.txt
+# cd ./agent_system/environments/env_package/search/third_party
+# pip install -e .
+# pip install gym==0.26.2
+# cd ../../../../../
 
-log "Install search environment"
-python3 -m uv pip install bitsandbytes deepspeed==0.16.4 isort jsonlines loralib optimum tensorboard torchmetrics transformers_stream_generator
-python3 -m uv pip install llama_index bs4 pymilvus infinity_client omegaconf hydra-core easydict mcp==1.9.3
-python3 -m uv pip install "faiss-gpu-cu12==1.9.0"
-python3 -m uv pip install nvidia-cublas-cu12==12.4.5.8 
+# log "Install search environment"
+# python3 -m uv pip install bitsandbytes deepspeed==0.16.4 isort jsonlines loralib optimum tensorboard torchmetrics transformers_stream_generator
+# python3 -m uv pip install llama_index bs4 pymilvus infinity_client omegaconf hydra-core easydict mcp==1.9.3
+# python3 -m uv pip install "faiss-gpu-cu12==1.9.0"
+# python3 -m uv pip install nvidia-cublas-cu12==12.4.5.8 
 
 
-save_path=dataset/search
-python examples/search_agent_trainer/search_data_download.py --local_dir $save_path
-cat $save_path/part_* > $save_path/e5_Flat.index
-gzip -d $save_path/wiki-18.jsonl.gz
-python examples/data_preprocess/preprocess_search_r1_dataset.py
+# save_path=dataset/search
+# python examples/search_agent_trainer/search_data_download.py --local_dir $save_path
+# cat $save_path/part_* > $save_path/e5_Flat.index
+# gzip -d $save_path/wiki-18.jsonl.gz
+# python examples/data_preprocess/preprocess_search_r1_dataset.py
 
 
 log "hf auth whoami"
@@ -77,4 +77,4 @@ nohup python examples/search_agent_trainer/retriever/retrieval_server.py \
   --retriever_name $retriever_name \
   --retriever_model $retriever_path \
   --faiss_gpu \
-  --port 8000 > retriever.log 2>&1 &
+  --port 8193 > retriever.log 2>&1 &

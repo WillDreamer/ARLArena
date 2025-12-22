@@ -196,7 +196,9 @@ class BM25Retriever(BaseRetriever):
 class DenseRetriever(BaseRetriever):
     def __init__(self, config):
         super().__init__(config)
+        print("Loading FAISS index from {}...".format(self.index_path))
         self.index = faiss.read_index(self.index_path)
+        print("FAISS index loaded.")
         if config.faiss_gpu:
             # Create explicit GPU resources and disable FAISS temp memory stack to avoid StackDeviceMemory assertions
             num_gpus = faiss.get_num_gpus()
@@ -215,6 +217,7 @@ class DenseRetriever(BaseRetriever):
             self.index = faiss.index_cpu_to_gpu_multiple(resources_vec, device_vec, self.index, co)
 
         self.corpus = load_corpus(self.corpus_path)
+        print("Corpus loaded with {} documents.".format(len(self.corpus)))
         self.encoder = Encoder(
             model_name=self.retrieval_method,
             model_path=config.retrieval_model_path,
@@ -222,6 +225,7 @@ class DenseRetriever(BaseRetriever):
             max_length=config.retrieval_query_max_length,
             use_fp16=config.retrieval_use_fp16,
         )
+        print("Encoder loaded.")
         self.topk = config.retrieval_topk
         self.batch_size = config.retrieval_batch_size
         # Serialize FAISS GPU index access across concurrent requests
@@ -398,8 +402,13 @@ if __name__ == "__main__":
         retrieval_batch_size=512,  # this is unused in the current retrieval implementation, which only supports single query
     )
 
+    print("step 1 done.")
+
     # 2) Instantiate a global retriever so it is loaded once and reused.
     retriever = get_retriever(config)
+    print("step 2 done.")
 
     # 3) Launch the server. By default, it listens on http://127.0.0.1:8000
     uvicorn.run(app, host="0.0.0.0", port=args.port)
+
+    print("step 3 done.")

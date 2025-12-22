@@ -67,10 +67,18 @@ actor_rollout_ref:
     use_kl_loss: False # True for GRPO
     use_torch_compile: True # False to disable torch compile
     kl_loss_coef: 0.001 # for grpo
-    kl_loss_type: low_var_kl # for grpo
+    kl_loss_type: low_var_kl # for 
+    kl_loss_update: False
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
+    policy_loss:
+      loss_mode: "vanilla"  # Options: 'vanilla', 'clip-cov', 'kl-cov', 'gpg', 'gspo'
+      clip_cov_ratio: 0.0002
+      clip_cov_lb: 1.0
+      clip_cov_ub: 5.0
+      kl_cov_ratio: 0.0002
+      ppo_kl_coef: 0.1
     checkpoint:
       save_contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
     optim:

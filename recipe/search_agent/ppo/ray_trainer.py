@@ -94,6 +94,17 @@ def apply_invalid_action_penalty(data: DataProto, invalid_action_penalty_coef=fl
     return data, metrics
 
 
+#* Newly added metrics
+def to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    return obj
+
+
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
     """Compute advantage estimates for policy optimization.
 
@@ -133,7 +144,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 kwargs.get("pf_ppo_reweight_method", "pow"),
                 kwargs.get("pf_ppo_weight_pow", 2.0),
             )
-    elif adv_estimator == AdvantageEstimator.GRPO:
+    elif adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.AEPO, AdvantageEstimator.GSPO, AdvantageEstimator.SAPO, AdvantageEstimator.CISPO, AdvantageEstimator.DAPO):
         # TODO: test on more adv estimator type
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
@@ -147,6 +158,39 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             index=data.non_tensor_batch["uid"],
             traj_index=data.non_tensor_batch['traj_uid'],
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.VGRPO:
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            compute_mean_std_cross_steps=False, # For vanilla GRPO, we compute the mean and std for the trajectory only
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.DRGRPO:
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=False, # For DGRPO, we hard code that we do not normalize by std
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
@@ -196,7 +240,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
     elif adv_estimator == AdvantageEstimator.GiGPO:
-        advantages, returns = compute_gigpo_outcome_advantage(
+        advantages, returns = core_algos.compute_gigpo_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
             step_rewards=data.batch['step_rewards'], # for step group reward computing
             response_mask=data.batch['response_mask'],
@@ -210,6 +254,43 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.EMPG:
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            # If multi-turn, replace the mask with the relevant part of loss_mask
+            response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+        # Call compute_grpo_outcome_advantage with parameters matching its definition
+        advantages, returns = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+        advantages, returns = core_algos.compute_EMPG_advantage(
+            batch=data,
+            )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
+    # elif adv_estimator == AdvantageEstimator.DRGRPO:
+    #     # DRGRPO use the same advantage computation as GRPO but without std normalization
+    #     grpo_calculation_mask = data.batch["response_mask"]
+    #     if multi_turn:
+    #         # If multi-turn, replace the mask with the relevant part of loss_mask
+    #         response_length = grpo_calculation_mask.size(1)  # Get length from the initial response mask
+    #         grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]  # This mask is the one intended for GRPO
+    #     # Call compute_grpo_outcome_advantage with norm_adv_by_std_in_grpo=False for Dr.GRPO
+    #     advantages, returns = core_algos.compute_grpo_outcome_advantage(
+    #         token_level_rewards=data.batch["token_level_rewards"],
+    #         response_mask=grpo_calculation_mask,
+    #         index=data.non_tensor_batch["uid"],
+    #         norm_adv_by_std_in_grpo=False,  # Dr.GRPO does not scale by std
+    #     )
+    #     data.batch["advantages"] = advantages
+    #     data.batch["returns"] = returns
     else:
         raise NotImplementedError
     return data
@@ -228,6 +309,15 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    EMPG = 'empg'
+    AEPO = "aepo"  # Adaptive Entropy Policy Optimization
+    GSPO = "gspo"  # Group Sequence Policy Optimization
+    SAPO = "sapo"  # Sequence-level Adaptive Policy Optimization
+    VGRPO = 'vanilla_grpo'  # Vanilla Group Reward Policy Optimization
+    DAPO = 'dapo'  # Dynamic Sampling Policy Optimization
+    CISPO = 'cispo'  # Contrastive Importance Sampling Policy Optimization
+    DRGRPO = "drgrpo"  # Dr.GRPO: Group Relative Policy Optimization without token averaging
+
 
 class SearchAgentTrainer(RayPPOTrainer):
     """
@@ -265,12 +355,39 @@ class SearchAgentTrainer(RayPPOTrainer):
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.AEPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.GSPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
+        # Automatically set loss_mode to "sapo" when using SAPO advantage estimator
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.SAPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "sapo"
+        # Automatically set loss_mode to "cispo" when using CISPO advantage estimator
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.CISPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "cispo"
+        # Automatically set loss_agg_mode to "seq-mean-token-sum" for DRGRPO to avoid token averaging
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.DRGRPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "drgrpo"
+                # Set loss aggregation mode to sum tokens instead of averaging them
+                if hasattr(self.config.actor_rollout_ref.actor, "loss_agg_mode"):
+                    self.config.actor_rollout_ref.actor.loss_agg_mode = "seq-mean-token-sum"
+                if hasattr(self.config.actor_rollout_ref.actor, "max_response_len_per_turn"):
+                    self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
+                    print(f"Set max_response_len_per_turn to {self.config.data.max_response_length} for DRGRPO")
+
+
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
 
         n = len(inputs)
+        # Only add log_probs, old_log_probs, entropy, ref_log_probs to base_data if they are not None
         base_data = {
             "input": inputs,
             "output": outputs,
@@ -278,14 +395,33 @@ class SearchAgentTrainer(RayPPOTrainer):
             "step": [self.global_steps] * n,
         }
 
+        #* Newly added metrics
+        analysis_data = {}
+        if input_ids_list is not None:
+            analysis_data["input_ids"] = to_jsonable(input_ids_list)
+        if output_ids_list is not None:
+            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        if log_probs is not None:
+            analysis_data["log_probs"] = to_jsonable(log_probs)
+        if old_log_probs is not None:
+            analysis_data["old_log_probs"] = to_jsonable(old_log_probs)
+        if entropy is not None:
+            analysis_data["entropy"] = to_jsonable(entropy)
+        if ref_log_probs is not None:
+            analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
+
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
-                base_data[k] = v
+                base_data[k] = to_jsonable(v)
 
         with open(filename, "w") as f:
             for i in range(n):
                 entry = {k: v[i] for k, v in base_data.items()}
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if analysis_data is not None:
+                for j in range(log_probs.shape[0]):
+                    entry = {k: v[j] for k, v in analysis_data.items()}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         print(f"Dumped generations to {filename}")
 
@@ -919,11 +1055,31 @@ class SearchAgentTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            #* Newly added metrics
+                            input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            output_ids_list = batch.batch["responses"].cpu().tolist()
+                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+                            
+
+                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            else:
+                                ref_log_probs = None
+
+                            #* Newly added metrics 
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
+                                input_ids_list=input_ids_list,
+                                output_ids_list=output_ids_list,
+                                log_probs=log_probs,
+                                old_log_probs=old_log_probs,
+                                entropy=entropy,
+                                ref_log_probs=ref_log_probs,
                                 dump_path=rollout_data_dir,
                             )
 

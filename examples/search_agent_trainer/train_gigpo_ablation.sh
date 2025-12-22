@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(1)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -30,15 +30,15 @@ experiment_name="${MODEL_SHORT}_${estimator}"
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-if pgrep -f "ray" > /dev/null; then
-    echo "==================== Detected existing Ray processes, exiting... ===================="
-    echo "==================== run "ray stop" to stop ray ===================="
-    exit 1
-fi
+# if pgrep -f "ray" > /dev/null; then
+#     echo "==================== Detected existing Ray processes, exiting... ===================="
+#     echo "==================== run "ray stop" to stop ray ===================="
+#     exit 1
+# fi
 PORT=$(( ( RANDOM % 10000 +1000) ))
 ray start --head --port $PORT
 
-WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
+WANDB_API_KEY="d8fd5859b3270d9ea4440a61b26f844d45976960"
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
@@ -67,15 +67,16 @@ python3 -m recipe.search_agent.main_search_agent \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
-    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_update=False \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
@@ -83,7 +84,7 @@ python3 -m recipe.search_agent.main_search_agent \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     use_invalid_action_penalty=True \
     invalid_action_penalty_coef=0.1 \
@@ -98,7 +99,7 @@ python3 -m recipe.search_agent.main_search_agent \
     env.max_steps=4 \
     env.rollout.n=$group_size \
     env.history_length=4 \
-    env.search.search_url='http://127.0.0.1:8000/retrieve' \
+    env.search.search_url='http://127.0.0.1:8193/retrieve' \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$project_name \

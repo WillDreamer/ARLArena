@@ -138,3 +138,6 @@ datasets/
 agent_system/environments/env_package/webshop/webshop/dataset/items_human_ins.json
 agent_system/environments/env_package/webshop/webshop/dataset/items_ins_v2_1000.json
 agent_system/environments/env_package/webshop/webshop/dataset/items_shuffle_1000.json
+
+
+dataset
