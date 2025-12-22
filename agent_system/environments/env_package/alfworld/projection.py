@@ -26,7 +26,6 @@ def alfworld_projection(actions: List[str], action_pools: List[List[str]]):
     format_valids = [0] * len(actions)
     valids = [0] * len(actions)
 
-    breakpoint()
     strict_pattern = re.compile(r'^\s*<think>(.*?)</think>\s*<action>(.*?)</action>\s*$', flags=re.IGNORECASE | re.DOTALL)
     action_first_re = re.compile(r'<\s*action\s*>(.*?)</\s*action\s*>', flags=re.IGNORECASE | re.DOTALL)
 
