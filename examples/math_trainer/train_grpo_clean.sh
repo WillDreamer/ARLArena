@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -9,37 +9,37 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-
+PATH_PREFIX=/data1/xw27/agent/ARLArena
 source /data1/xw27/miniconda3/etc/profile.d/conda.sh
-cd /home/xw27/agent/ARLArena
+cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=512
+TRAIN_BATCH_SIZE=128
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=8192
-MAX_RESPONSE_LENGTH=8192
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=4096
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
 PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=2
-TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
-# VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad" "/home/xw27/agent/ARLArena/datasets/deepscaler/math")
+TOTAL_EPOCHS=1
+TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
+VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
 MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=True #mask for now
+REMOVE_CLIP=False #mask for now
+REMOVE_EXTRA_VOID_TURN=False
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
-REJECTION_SAMPLE=True
+REJECTION_SAMPLE=False
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -48,7 +48,7 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=2
+OVERSAMPLE=1
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
@@ -59,7 +59,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r8192_n8_4B_Base_grpo_dynamic_removeclip_temp1.0
+RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_bs128_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -356,6 +356,7 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     trainer.resume_mode=$RESUME_MODE \
     trainer.resume_from_path=$RESUME_FROM_PATH \
     trainer.balance_batch=$BALANCE_BATCH \
+    trainer.remove_extra_void_turn=$REMOVE_EXTRA_VOID_TURN \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
     data.max_start_length=4096 \

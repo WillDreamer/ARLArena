@@ -5,11 +5,16 @@ set -x
 SAVE_PATH=../../checkpoints/
 [ -d "$SAVE_PATH" ] || mkdir -p "$SAVE_PATH"
 
-wget -O $HOME/ARLArena/datasets/train.parquet https://huggingface.co/datasets/willamazon1/rft_alfworld/resolve/main/train.parquet
 
 
 TRAIN_DATA=$HOME/ARLArena/datasets/train.parquet
 EVAL_DATA=$HOME/ARLArena/datasets/train.parquet
+wget -O $HOME/data/train.parquet https://huggingface.co/datasets/willamazon1/alfworld_sft/resolve/main/train.parquet
+
+
+TRAIN_DATA=$HOME/data/train.parquet
+EVAL_DATA=$HOME/data/train.parquet
+TASK=Alfworld
 MODEL_PATH=Qwen/Qwen3-4B
 MODEL_SHORT="${MODEL_PATH##*/}"
 

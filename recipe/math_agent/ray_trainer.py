@@ -758,7 +758,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
 
         train_batch_size = self.config.data.train_batch_size
         # rejection sampling or remove clipped length both require a larger batch size in prior
-        if self.config.trainer.rejection_sample or self.config.trainer.remove_clip:
+        if self.config.trainer.rejection_sample or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn_filter:
             train_batch_size *= self.config.trainer.oversample_multiplier
             # round train_batch_size to the multipler of world size
             world_size = (
@@ -1199,6 +1199,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
         ref_log_probs=None,
         turn_counts=None,
         code_call_counts=None,
+        advantages=None,
+        grad_norm=None,
+        sequence_reward=None,
         dump_path="./generations",
     ):
         """Dump rollout/validation samples as JSONL."""
@@ -1226,6 +1229,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
 
         if code_call_counts is not None and len(code_call_counts) == n:
             base_data["num_code_calls"] = code_call_counts
+            
 
         #* Newly added metrics
         analysis_data = {}
@@ -1241,9 +1245,13 @@ class RayMathAgentTrainer(RayPPOTrainer):
             analysis_data["entropy"] = to_jsonable(entropy)
         if ref_log_probs is not None:
             analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
-
-        
-
+        if advantages is not None:
+            analysis_data["advantages"] = to_jsonable(advantages)
+        if sequence_reward is not None:
+            analysis_data["sequence_reward"] = to_jsonable(sequence_reward)
+        if grad_norm is not None:
+            grad_norm_json = to_jsonable(grad_norm)
+            analysis_data["grad_norm"] = [grad_norm_json] * n
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
                 base_data[k] = v
@@ -1468,10 +1476,12 @@ class RayMathAgentTrainer(RayPPOTrainer):
                         loss_mask = batch.batch["info_mask"][:, -response_length:]
                         
                         batch.batch["loss_mask"] = loss_mask * response_mask
+                        if self.config.trainer.remove_extra_void_turn:
+                            batch.batch["loss_mask"] = batch.batch[
+                                "loss_mask"
+                            ] * batch.batch["void_turn_mask"].reshape(-1, 1)
 
-                        batch.batch["loss_mask"] = batch.batch[
-                            "loss_mask"
-                        ] * batch.batch["void_turn_mask"].reshape(-1, 1)
+                            batch.batch["response_mask"] = batch.batch["loss_mask"] # the response mask is the loss mask
 
                         metrics.update(
                             {
@@ -1628,6 +1638,19 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                             is_filtered = True
                                             over_long_all += 1
 
+                                    traj_mask = batch.batch["response_mask"].reshape(-1, self.config.actor_rollout_ref.rollout.n)
+                                    
+                                    #* newly added about removing extra void turn
+                                    if self.config.trainer.remove_extra_void_turn_filter:
+                                        valid_traj_mask = traj_mask.sum(axis=1) > 0  # (num_trajs_for_uid,)
+                                        num_valid_trajs = valid_traj_mask.sum().item()
+                                        
+                                        if num_valid_trajs < min_rollout_n:
+                                            print(f"Number of valid trajectories ({num_valid_trajs}) is less than min_rollout_n ({min_rollout_n}) for uid: {uid}")
+                                            valid_mask[uid_mask] = False
+                                            is_filtered = True
+                                            over_long_all += 1
+
                                     if is_filtered:
                                         filter_all += 1
 
@@ -1648,7 +1671,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
 
                         if (
                             self.config.trainer.rejection_sample
-                            or self.config.trainer.remove_clip
+                            or self.config.trainer.remove_clip or self.config.trainer.remove_extra_void_turn_filter
                         ):
                             # If no valid samples remain, skip this batch and get a new one
                             print(f"valid_mask: {valid_mask}")
@@ -1686,6 +1709,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                 batch.batch["input_ids"].shape[0]
                                 // self.config.actor_rollout_ref.rollout.n
                             )
+                            metrics["batch/valid_query_size"] = valid_query_size
                             metrics["batch/effective_batch_size"] = min(
                                 valid_query_size, self.config.data.train_batch_size
                             )
@@ -1837,6 +1861,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
                             log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
                             old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
                             entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+                            advantages = batch.batch["advantages"]
+                            grad_norm = actor_output.meta_info["metrics"]["actor/grad_norm"]
+                            sequence_reward = batch.batch["token_level_rewards"].sum(-1)
 
                             if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
                                 ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
@@ -1856,6 +1883,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                 ref_log_probs=ref_log_probs,
                                 turn_counts=turn_counts,
                                 code_call_counts=code_call_counts,
+                                advantages=advantages,
+                                grad_norm=grad_norm,
+                                sequence_reward=sequence_reward,
                                 dump_path=rollout_data_dir,
                             )
                     # validate

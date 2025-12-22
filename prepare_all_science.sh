@@ -40,14 +40,7 @@ mkdir -p datasets/simplelr_math_35
 mkdir -p datasets/deepscaler
 wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
 wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
-wget -P datasets/deepscaler/train https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/train.parquet
-wget -P datasets/deepscaler/test https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/test.parquet
-wget -P datasets/deepscaler/aime https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/aime.parquet
-wget -P datasets/deepscaler/aime25 https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/aime_2025.parquet
-wget -P datasets/deepscaler/olympiad https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/olympiad_bench.parquet
-wget -P datasets/deepscaler/math https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/math.parquet
-wget -P datasets/deepscaler/amc https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/amc.parquet
-wget -P datasets/deepscaler/minerva https://huggingface.co/datasets/hkust-nlp/DeepScaler-Data/resolve/main/minerva.parquet
+
 
 # python3 -m uv pip install -e ".[sglang]"
 python3 -m uv pip install -e ".[vllm]"
