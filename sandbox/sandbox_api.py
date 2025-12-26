@@ -81,7 +81,8 @@ async def _run_in_firejail(code: str, timeout: float, stdin_data: str = "") -> d
 
     # 2) Build Firejail command line
     cmd = [
-        "python3"
+        "python3",
+        src.name,
     ]
     # cmd = [
     #     "firejail",

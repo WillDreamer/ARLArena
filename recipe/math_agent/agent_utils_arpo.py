@@ -135,6 +135,7 @@ class GenerationConfig:
     rollout_n: int
     mask_void_turns: bool
     append_final_answer_func: bool
+    sandbox_run_timeout: float = 3.0
     # ARPO Entropy parameters
     entropy_weight: float = 0.5  # Weight for entropy in branching decision
     branch_probability: float = 0.5  # Base probability threshold for branching
@@ -792,7 +793,7 @@ def final_answer(result):
 
         if tasks:
             sandbox_success, sandbox_stdout, sandbox_stderr = asyncio.run(
-                parallel_sandbox(tasks, num_processes=256)
+                parallel_sandbox(tasks, num_processes=256, run_timeout=self.config.sandbox_run_timeout)
             )
             for j, env_idx in enumerate(index_mapping):
                 success = sandbox_success[j]
