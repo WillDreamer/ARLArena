@@ -941,6 +941,8 @@ class WorldAgentTrainer(RayPPOTrainer):
                         entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
+                        old_entropy = old_log_prob.batch["entropys"]
+                        batch = batch.union(DataProto.from_single_dict({"old_entropy": old_entropy}))
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
