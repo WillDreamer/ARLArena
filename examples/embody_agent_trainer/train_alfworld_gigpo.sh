@@ -52,7 +52,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_kl_0_1_temp_1"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_kl_0_1_temp_1_format_error"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
