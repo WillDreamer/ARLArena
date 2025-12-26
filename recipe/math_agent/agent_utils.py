@@ -133,6 +133,7 @@ class GenerationConfig:
     rollout_n: int
     mask_void_turns: bool
     append_final_answer_func: bool
+    sandbox_run_timeout: float = 3.0
 
 
 class AgentHelper:
@@ -647,13 +648,16 @@ def final_answer(result):
 
         if tasks:
             sandbox_success, sandbox_stdout, sandbox_stderr = asyncio.run(
-                parallel_sandbox(tasks, num_processes=256)
+                parallel_sandbox(tasks, num_processes=256, run_timeout=self.config.sandbox_run_timeout)
             )
             for j, env_idx in enumerate(index_mapping):
                 success = sandbox_success[j]
                 stdout = str(sandbox_stdout[j])
                 stderr = str(sandbox_stderr[j])
                 total_lines, code_lines = count_lines(tasks[j])
+                # print(f"stdout: {stdout}")
+                # print(f"stderr: {stderr}")
+                # print(f"success: {success}")
 
                 obs = ""
                 if len(stderr) > 0:

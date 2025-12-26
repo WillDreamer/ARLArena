@@ -1005,6 +1005,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
                 "rollout_n": 1,
                 "mask_void_turns": False,  # no void turn masking during validation
                 "append_final_answer_func": self.config.agent.append_final_answer_func,
+                "sandbox_run_timeout": self.config.agent.get("sandbox_run_timeout", 3.0),
             }
             
             # Note: AEPO-specific rollout parameters removed - only advantage computation is kept
@@ -1051,8 +1052,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
                 "recompute_log_prob": False,
                 "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
                 "validate": True,
+                "temperature": self.config.actor_rollout_ref.rollout.val_kwargs.temperature,
             }
-            print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
+            # print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
 
             # pad to be divisible by dp_size
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(
@@ -1344,6 +1346,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
                 "rollout_n": self.config.actor_rollout_ref.rollout.n,
                 "mask_void_turns": True,
                 "append_final_answer_func": self.config.agent.append_final_answer_func,
+                "sandbox_run_timeout": self.config.agent.get("sandbox_run_timeout", 3.0),
             }
             
             # Note: AEPO-specific rollout parameters removed - only advantage computation is kept

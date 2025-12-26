@@ -13,7 +13,7 @@ data:
   max_start_length: 4096
   max_obs_length: 256
   seed: 0
-  shuffle: True
+  shuffle: False
   prompt: |
     Solve the following problem step by step. You now have the ability to selectively write executable Python code to enhance your reasoning process. The Python code will be executed by an external sandbox, and the output (after "Code execution result: ") is returned to aid your reasoning and help you arrive at the final answer. The Python code should be complete scripts, including necessary imports.
 
@@ -59,7 +59,7 @@ actor_rollout_ref:
       # sampling parameters for validation
       top_k: -1 # 0 for hf rollout, -1 for vllm rollout
       top_p: 0.7
-      temperature: 1.0
+      temperature: 0.6
       n: 4
       do_sample: True # default eager for validation
 
@@ -87,7 +87,8 @@ reward_model:
 agent:
   tool_use: True
   max_turns: 5
-  append_final_answer_func: False
+  append_final_answer_func: True
+  sandbox_run_timeout: 3.0
 
 algorithm:
   use_kl_in_reward: False

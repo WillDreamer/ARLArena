@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(1 2)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -9,31 +9,31 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-PATH_PREFIX=/home/xw27/agent/ARLArena
-source /home/xw27/anaconda3/etc/profile.d/conda.sh
+PATH_PREFIX=/data1/xw27/agent/ARLArena
+source /data1/xw27/miniconda3/etc/profile.d/conda.sh
 cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
-TRAIN_BATCH_SIZE=16
+TRAIN_BATCH_SIZE=128
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=8
 ROLLOUT_TEMPERATURE=1.0
-VAL_TEMPERATURE=1.0
+VAL_TEMPERATURE=0.6
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=1024
-MAX_RESPONSE_LENGTH=1024
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=4096
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=16
-PPO_MICRO_TOKEN=9000
+PPO_MINI_BATCH_SIZE=128
+PPO_MICRO_TOKEN=24000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
 VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
-ROLLOUT_GPU_MEMORY_UTIL=0.3
+ROLLOUT_GPU_MEMORY_UTIL=0.5
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-0.6B
+MODEL_NAME=Qwen/Qwen3-4B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=False #mask for now
@@ -49,10 +49,10 @@ BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
 OVERSAMPLE=1
+SANDBOX_RUN_TIMEOUT=3.0
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
-APPEND_FINAL_ANSWER_FUNC=True
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
@@ -60,7 +60,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_0.6B_grpo_bs16_mbs16_lr1e-6_temp
+RUN_NAME=math_p4096_r4096_n8_4B_Base_grpo_bs128_mbs128_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -196,6 +196,7 @@ while [[ "$#" -gt 0 ]]; do
     --balance_batch) BALANCE_BATCH="$2"; shift 2 ;;
     --tool_use) TOOL_USE="$2"; shift 2 ;;
     --oversample) OVERSAMPLE="$2"; shift 2 ;;
+    --sandbox_run_timeout) SANDBOX_RUN_TIMEOUT="$2"; shift 2 ;;
     --val_only) VAL_ONLY="$2"; shift 2 ;;
     --log_val_generations) LOG_VAL_GENERATIONS="$2"; shift 2 ;;
     --output_acc_to_file) OUTPUT_ACC_TO_FILE="$2"; shift 2 ;;
@@ -221,7 +222,6 @@ export TMPDIR="$RAY_TMP"
 #     echo "==================== Detected existing Ray processes, exiting... ===================="
 #     exit 1
 # fi
-ray stop
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 PORT=1376
@@ -361,7 +361,7 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     trainer.remove_extra_void_turn=$REMOVE_EXTRA_VOID_TURN \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
-    agent.append_final_answer_func=$APPEND_FINAL_ANSWER_FUNC \
+    agent.sandbox_run_timeout=$SANDBOX_RUN_TIMEOUT \
     data.max_start_length=4096 \
     data.max_obs_length=$MAX_OBS_LENGTH \
     trainer.val_only=$VAL_ONLY \
