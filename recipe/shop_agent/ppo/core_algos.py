@@ -558,7 +558,7 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
     """
 
     # --- 1. Calculate Modulated Advantage Components ---
-    H = np.array(batch.batch['old_entropy'])
+    H = np.mean(np.array(batch.batch['old_entropy']) * batch.batch['response_mask'], axis=1,keepdims=True)
     # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
     min_H, max_H = np.min(H), np.max(H)
     H_norm = (H - min_H) / (max_H - min_H + 1e-8)

@@ -6,12 +6,12 @@
 
 from huggingface_hub import create_repo, upload_folder
 
-repo_name = "willamazon1/Qwen3-4B-rft-webshop"
+repo_name = "willamazon1/Qwen3-4B-rft-alfworld-e1"
 repo_id = repo_name  
 create_repo(repo_id, exist_ok=True)
 
 upload_folder(
     repo_id=repo_id,
-    folder_path="/workspace/Qwen3-4B-rft-webshop",  
+    folder_path="/data1/whx/ARLArena/checkpoints/Qwen3-4B-alfworld-e1",  
     path_in_repo=".",                
 )
