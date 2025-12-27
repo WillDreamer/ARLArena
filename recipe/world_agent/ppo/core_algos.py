@@ -596,6 +596,7 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.05):
     # --- 3. Second Pass: Apply Advantage Modulation (Eq. 8) ---
     for i in range(batch.batch.batch_size[0]):
         raw_prompt = batch.non_tensor_batch['raw_prompt'][i][0]['content']
+        traj_uid = batch.non_tensor_batch['traj_uid'][i]
         # Apply self-calibrating gradient scaling
         batch.batch['advantages'][i] *= g_H[i]
 
@@ -606,8 +607,7 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.05):
             turn_idx = 0
         
         if turn_idx+1 < len(steps2traj_f_H[traj_uid]):
-            f_H_key = batch.non_tensor_batch['traj_uid'][i]
-            batch.batch['advantages'] += zeta * steps2traj_f_H[f_H_key][turn_idx + 1]
+            batch.batch['advantages'] += zeta * steps2traj_f_H[traj_uid][turn_idx + 1]
         
     batch.batch['advantages'] -= torch.mean(batch.batch['advantages'])
 
