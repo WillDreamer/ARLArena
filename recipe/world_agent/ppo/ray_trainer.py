@@ -379,7 +379,7 @@ class WorldAgentTrainer(RayPPOTrainer):
                     self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
                     print(f"Set max_response_len_per_turn to {self.config.data.max_response_length} for DRGRPO")
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
@@ -397,8 +397,6 @@ class WorldAgentTrainer(RayPPOTrainer):
         analysis_data = {}
         if input_ids_list is not None:
             analysis_data["input_ids"] = to_jsonable(input_ids_list)
-        if output_ids_list is not None:
-            analysis_data["output_ids"] = to_jsonable(output_ids_list)
         if log_probs is not None:
             analysis_data["log_probs"] = to_jsonable(log_probs)
         if old_log_probs is not None:
@@ -1056,14 +1054,13 @@ class WorldAgentTrainer(RayPPOTrainer):
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
                             #* Newly added metrics
-                            input_ids_list = batch.batch["prompts"].cpu().tolist()
-                            output_ids_list = batch.batch["responses"].cpu().tolist()
-                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
-                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
-                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+                            input_ids_list = actor_output.batch["input_ids"].tolist()
+                            log_probs = actor_output.batch["log_prob"]
+                            old_log_probs = actor_output.batch["old_log_prob"]
+                            entropy = actor_output.batch["entropy"]
 
-                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
-                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            if actor_output.batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.batch["ref_log_prob"]
                             else:
                                 ref_log_probs = None
 
@@ -1074,7 +1071,6 @@ class WorldAgentTrainer(RayPPOTrainer):
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
                                 input_ids_list=input_ids_list,
-                                output_ids_list=output_ids_list,
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
