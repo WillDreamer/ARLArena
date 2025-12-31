@@ -734,7 +734,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             # TODO: here, we should return all metrics
 
-            output = DataProto(meta_info={"metrics": metrics, "collect_logprobs": collect_logprobs})
+            output = DataProto.from_dict(tensors=collect_logprobs, meta_info={"metrics": metrics})
 
             output = output.to("cpu")
 
