@@ -810,7 +810,7 @@ class DataProto:
         Args:
             data (List[DataProto]): list of DataProto
 
-        Returns:x
+        Returns:
             DataProto: concatenated DataProto
         """
         batch_lst = []
