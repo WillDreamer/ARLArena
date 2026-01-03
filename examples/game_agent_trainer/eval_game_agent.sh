@@ -2,10 +2,10 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
-export RAY_TMPDIR="/home/ubuntu/ray_out/ray_$(date +%s)"
+export RAY_TMPDIR="/local/dannie/ray_out/ray_$(date +%s)"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -20,7 +20,7 @@ echo "Detected ${NUM_GPUS} GPUs for this run"
 
 train_data_size=256
 val_data_size=256
-ENV_SEED=0  # change the seed for multiple valid evaluations
+ENV_SEED=2  # change the seed for multiple valid evaluations
 
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
@@ -28,7 +28,7 @@ mode="mean_std_norm"
 MODEL=Qwen/Qwen2.5-VL-3B-Instruct  # TODO: can I use stronger model like Qwen3-VL-7B-Instruct?
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_basline"
-estimator="grpo"  # TODO: can I use stronger estimator like gigpo?
+estimator="gigpo"  # TODO: can I use stronger estimator like gigpo?
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -42,13 +42,6 @@ if [ "$WANDB_API_KEY" != "" ]; then
     SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
-
-# Check if any ray processes are running, exit if present, otherwise start ray
-# if pgrep -f "ray" > /dev/null; then
-#     echo "==================== Detected existing Ray processes, exiting... ===================="
-#     exit 1
-# fi
-
 
 PORT=$(( ( RANDOM % 999 ) + 1001 ))
 DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))

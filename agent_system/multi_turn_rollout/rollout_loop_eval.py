@@ -292,8 +292,6 @@ class TrajectoryCollector:
 
         # Initial observations from the environment
         obs, infos = envs.reset(kwargs=gen_batch.non_tensor_batch.pop('env_kwargs', None))
-        # Save initial images for the entire trajectory (each sample has one image for all turns)
-        image_saved = obs.get('image', None)
 
         lenght_obs = len(obs['text']) if obs['text'] is not None else len(obs['image'])
         assert len(gen_batch.batch) == lenght_obs, f"gen_batch size {len(gen_batch.batch)} does not match obs size {lenght_obs}"

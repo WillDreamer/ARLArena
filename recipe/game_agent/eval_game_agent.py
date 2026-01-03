@@ -154,20 +154,24 @@ def main(config):
                     turns = []
                     # response_texts为每轮list，每轮包含该batch（n）的信息
                     # Extract image from the first turn (all turns share the same image for each sample)
-                    image_serialized = None
+                    # image_serialized = None
                     first_turn = response_texts[0]
                     print(f"first_turn.keys: {first_turn.keys()}")
-                    if "image" in first_turn and first_turn["image"] is not None:
-                        img_obj = first_turn["image"][sample_idx]  # first_turn["image"]: list, length=256
+                    if "images" in first_turn and first_turn["images"] is not None:
+                        img_obj = first_turn["images"][sample_idx]  # first_turn["images"]: list, length=256
                         print(f"img_obj: {img_obj[0]}")
                         image_serialized = _serialize_image_for_json(img_obj[0])
                     
                     for turn in response_texts:
                         # turn['inputs']和turn['outputs']都是n个sample
+                        image_serialized = None
+                        img_obj = turn["images"]
+                        print(f"image for turn {turn['step']} shape: {img_obj.shape}")
                         turn_result = {
                             "step": turn.get('step', None),
                             "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
                             "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None,
+                            "image": image_serialized
                         }
                         turns.append(turn_result)
 
@@ -175,7 +179,7 @@ def main(config):
                         "sample_idx": sample_idx,
                         "task_score": score,
                         "turns": turns,
-                        "image": image_serialized  # Serialized image for the entire conversation
+                        "images": image_serialized  # Serialized image for the entire conversation
                     })
 
             with open(output_path, "w", encoding="utf-8") as f:
