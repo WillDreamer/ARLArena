@@ -82,4 +82,10 @@ def sokoban_projection(actions: List[str]):
         if think_start_idx == -1 or think_end_idx == -1:
             valids[i] = 0
 
+        if re.search(r'[\u4e00-\u9fff]', original_str):
+            valids[i] = 0
+        
+        if think_end_idx > start_idx:
+            valids[i] = 0
+
     return actions, valids
