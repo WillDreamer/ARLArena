@@ -63,7 +63,7 @@ class MultiTurnSFTDataset(Dataset):
         self.enable_thinking_key = multiturn_config.get("enable_thinking_key", "enable_thinking")
         self.apply_chat_template_kwargs = config.get("apply_chat_template_kwargs", {})
         # Multimodal keys
-        self.image_key = config.get("image_key", "image")
+        self.image_key = config.get("image_key", "images")
         self.video_key = config.get("video_key", "video")
         self.return_multi_modal_inputs = config.get("return_multi_modal_inputs", True)
         assert self.truncation in ["error", "left", "right"]
@@ -139,13 +139,33 @@ class MultiTurnSFTDataset(Dataset):
     def _convert_turns_to_messages(self, turns):
         """
         Convert turns format to messages format.
-        Turns format: [{"step": int, "inputs": [{"content": str, "role": str}], "outputs": str}, ...]
+        Turns format: [{"step": int, "inputs"/"messages": [{"content": str, "role": str}], "outputs": str}, ...]
         Messages format: [{"role": str, "content": str}, ...]
+        Supports both "inputs" and "messages" keys for backward compatibility.
+        Also handles cases where turns["messages"] is already a flat list of messages.
         """
         messages = []
         for turn in turns:
-            # Add all input messages
-            if "inputs" in turn and turn["inputs"]:
+            # Check if turn["messages"] is already a flat list of messages (already converted)
+            if "messages" in turn and turn["messages"]:
+                # Check if it's already in the correct format (list of dicts with "role" and "content")
+                if isinstance(turn["messages"], list) and len(turn["messages"]) > 0:
+                    first_msg = turn["messages"][0]
+                    if isinstance(first_msg, dict) and "role" in first_msg and "content" in first_msg:
+                        # Already in correct format, use directly
+                        messages.extend(turn["messages"])
+                    else:
+                        # Not in correct format, convert it
+                        for input_msg in turn["messages"]:
+                            messages.append({
+                                "role": input_msg.get("role", "user"),
+                                "content": input_msg.get("content", "")
+                            })
+                else:
+                    # Empty or invalid, skip
+                    pass
+            elif "inputs" in turn and turn["inputs"]:
+                # Legacy format with "inputs" key
                 for input_msg in turn["inputs"]:
                     messages.append({
                         "role": input_msg.get("role", "user"),
@@ -178,7 +198,10 @@ class MultiTurnSFTDataset(Dataset):
         # If messages_key is not found but turns exists, convert from turns
         if not messages and "turns" in example:
             turns = example.get("turns", [])
-            if turns.any():
+            # Handle both list and numpy array cases
+            if isinstance(turns, list) and len(turns) > 0:
+                messages = self._convert_turns_to_messages(turns)
+            elif hasattr(turns, 'any') and turns.any():
                 messages = self._convert_turns_to_messages(turns)
         
         # Handle different message formats (list, single dict, or nested structure)
@@ -190,7 +213,6 @@ class MultiTurnSFTDataset(Dataset):
 
         # Check if example has image_key or video_key (similar to rl_dataset)
         if self.image_key in example or self.video_key in example:
-            print("---------------------------------image_key or video_key in example---------------------------------")
             for message in messages:
                 content = message.get("content", "")
                 if isinstance(content, str):
@@ -257,9 +279,13 @@ class MultiTurnSFTDataset(Dataset):
                     tools=tools,
                     **self.apply_chat_template_kwargs,
                 )
-
         else:
             prev_applied_text = ""
+            if is_assistant:
+                # When start_idx=0, we need to handle empty messages list
+                # For empty list, we can't apply chat template, so use empty string
+                # The generation prompt will be added by the collator
+                prev_applied_text_w_generation_prompt = ""
 
         cur_applied_text = tokenizer_or_processor.apply_chat_template(
             messages[:end_idx],
@@ -366,6 +392,16 @@ class MultiTurnSFTDataset(Dataset):
         # Build messages with multimodal content support (similar to rl_dataset)
         messages = self._build_messages(row_dict)
         
+        # Validate messages
+        if not messages or len(messages) == 0:
+            raise ValueError(
+                f"Empty messages for item {item}. "
+                f"Row dict keys: {list(row_dict.keys())}. "
+                f"messages_key: {self.messages_key}. "
+                f"turns in row_dict: {'turns' in row_dict}. "
+                f"Please check the data format."
+            )
+        
         # Get tools and enable_thinking from pre-extracted lists or row_dict
         tools = self.tools[item] if self.tools is not None else row_dict.get(self.tools_key, None)
         enable_thinking = self.enable_thinking[item] if self.enable_thinking is not None else row_dict.get(self.enable_thinking_key, None)
@@ -382,13 +418,30 @@ class MultiTurnSFTDataset(Dataset):
             processed_images = []
             for img in image_data:
                 if isinstance(img, dict):
-                    # Handle base64 format from JSON: {"format": "png_base64", "data": "base64_string"}
-                    if img.get("format") == "png_base64" and "data" in img:
+                    # Handle base64 format from JSON: {"format": "png_base64", "data"/"images": "base64_string"}
+                    # Support both "data" and "images" keys for backward compatibility
+                    data_key = None
+                    if img.get("format") == "png_base64":
+                        if "images" in img:
+                            data_key = "images"
+                        elif "data" in img:
+                            data_key = "data"
+                    
+                    if data_key:
                         import base64
                         from io import BytesIO
                         # Decode base64 to bytes
-                        image_bytes = base64.b64decode(img["data"])
+                        image_bytes = base64.b64decode(img[data_key])
                         # Convert to process_image-compatible format: {"bytes": bytes}
+                        img = {"bytes": image_bytes}
+                    # Also handle simple dict format: {"images": "base64_string"} or {"data": "base64_string"}
+                    elif "images" in img and isinstance(img["images"], str):
+                        import base64
+                        image_bytes = base64.b64decode(img["images"])
+                        img = {"bytes": image_bytes}
+                    elif "data" in img and isinstance(img["data"], str):
+                        import base64
+                        image_bytes = base64.b64decode(img["data"])
                         img = {"bytes": image_bytes}
                 processed_images.append(process_image(img))
             images = processed_images
@@ -418,197 +471,30 @@ class MultiTurnSFTDataset(Dataset):
                 video_data = [video_data]
             videos = [process_video(video) for video in video_data]
 
-        # Process with processor if available, otherwise use tokenizer
-        if self.processor is not None:
-            # Use processor for multimodal processing
-            raw_prompt = self.processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
-                enable_thinking=enable_thinking,
-                tools=tools,
-                **self.apply_chat_template_kwargs,
-            )
-
-            # Process multimodal inputs
-            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
-            full_tokens = model_inputs["input_ids"]
-            full_attention_mask = model_inputs["attention_mask"]
-            
-            # Store multimodal data
-            multi_modal_data = {}
-            if images is not None:
-                multi_modal_data["image"] = images
-            if videos is not None:
-                multi_modal_data["video"] = [video.numpy() if hasattr(video, 'numpy') else video for video in videos]
-
-            # Extract other multimodal inputs if needed
-            multi_modal_inputs = {}
-            if self.return_multi_modal_inputs:
-                for key, value in model_inputs.items():
-                    if key not in ["input_ids", "attention_mask"]:
-                        multi_modal_inputs[key] = value
-                # Remove second_per_grid_ts if present (not used for training)
-                multi_modal_inputs.pop("second_per_grid_ts", None)
-
-        else:
-            # Use tokenizer for text-only processing
-            tokenizer = self.tokenizer
-            try:
-                full_tokens = tokenizer.apply_chat_template(
-                    messages,
-                    tools=tools,
-                    tokenize=True,
-                    return_tensors="pt",
-                    add_generation_prompt=False,
-                    enable_thinking=enable_thinking,
-                    **self.apply_chat_template_kwargs,
-                )
-                full_attention_mask = torch.ones_like(full_tokens[0])
-            except Exception as e:
-                logging.error(
-                    f"Error applying chat template: {e}\nMessages: {messages}\nTools: {tools}\nEnable thinking: "
-                    f"{enable_thinking}"
-                )
-                raise
-            multi_modal_data = {}
-            multi_modal_inputs = {}
-
-        # Track concatenated tokens for validation
-        concat_tokens = []
-        concat_loss_mask = []
-        concat_attention_mask = []
-
-        i = 0
-        while i < len(messages):
-            cur_messages = messages[i]
-            if cur_messages["role"] == "assistant":
-                # Process assistant message
-                tokens, loss_mask, attention_mask = self._process_message_tokens(
-                    messages, i, i + 1, is_assistant=True, enable_thinking=enable_thinking, 
-                    tools=tools, images=images, videos=videos
-                )
-                concat_tokens.extend(tokens)
-                concat_loss_mask.extend(loss_mask)
-                concat_attention_mask.extend(attention_mask)
-                i += 1
-            elif cur_messages["role"] == "tool":
-                # Process consecutive tool messages
-                st = i
-                ed = i + 1
-                while ed < len(messages) and messages[ed]["role"] == "tool":
-                    ed += 1
-                tokens, loss_mask, attention_mask = self._process_message_tokens(
-                    messages, st, ed, enable_thinking=enable_thinking, tools=tools,
-                    images=images, videos=videos
-                )
-                concat_tokens.extend(tokens)
-                concat_loss_mask.extend(loss_mask)
-                concat_attention_mask.extend(attention_mask)
-                i = ed
-            elif cur_messages["role"] in ["user", "system"]:
-                # Process user or system message
-                if cur_messages["role"] == "system" and i != 0:
-                    raise ValueError("System message should be the first message")
-                tokens, loss_mask, attention_mask = self._process_message_tokens(
-                    messages, i, i + 1, enable_thinking=enable_thinking, tools=tools,
-                    images=images, videos=videos
-                )
-                concat_tokens.extend(tokens)
-                concat_loss_mask.extend(loss_mask)
-                concat_attention_mask.extend(attention_mask)
-                i += 1
-            else:
-                raise ValueError(f"Unknown role: {cur_messages['role']}")
-
-        # For processor, we need to use the full tokens from processor
-        # For tokenizer, we validate against concatenated tokens
-        if self.processor is not None:
-            # With processor, use the full tokens directly
-            input_ids = full_tokens[0]
-            attention_mask = full_attention_mask[0]
-            # For loss_mask, we need to align with the processor's tokenization
-            # This is a simplified approach - in practice, you may need more sophisticated alignment
-            # We'll use the concatenated loss_mask as a reference, but pad/truncate to match processor output
-            if len(concat_loss_mask) > 0:
-                # Try to use concatenated loss_mask, but adjust length to match processor output
-                if len(concat_loss_mask) <= len(input_ids):
-                    loss_mask = torch.tensor(concat_loss_mask, dtype=torch.long)
-                    # Pad if needed
-                    if len(loss_mask) < len(input_ids):
-                        padding = torch.zeros(len(input_ids) - len(loss_mask), dtype=loss_mask.dtype)
-                        loss_mask = torch.cat([loss_mask, padding])
-                else:
-                    # Truncate if needed
-                    loss_mask = torch.tensor(concat_loss_mask[:len(input_ids)], dtype=torch.long)
-            else:
-                # Fallback: create zero loss_mask
-                loss_mask = torch.zeros_like(input_ids)
-        else:
-            # Validate and convert tokens for tokenizer-only case
-            input_ids, loss_mask, attention_mask = self._validate_and_convert_tokens(
-                full_tokens[0], concat_tokens, concat_loss_mask, concat_attention_mask
-            )
-
-        # Handle sequence length
-        sequence_length = input_ids.shape[0]
-        if sequence_length < self.max_length:
-            # Pad sequences
-            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
-            padded_input_ids = torch.full((self.max_length - sequence_length,), pad_token_id, dtype=input_ids.dtype)
-            padded_attention_mask = torch.zeros((self.max_length - sequence_length,), dtype=attention_mask.dtype)
-            padded_loss_mask = torch.zeros((self.max_length - sequence_length,), dtype=loss_mask.dtype)
-
-            input_ids = torch.cat((input_ids, padded_input_ids))
-            attention_mask = torch.cat((attention_mask, padded_attention_mask))
-            loss_mask = torch.cat((loss_mask, padded_loss_mask))
-        elif sequence_length > self.max_length:
-            if self.truncation == "left":
-                input_ids = input_ids[-self.max_length :]
-                attention_mask = attention_mask[-self.max_length :]
-                loss_mask = loss_mask[-self.max_length :]
-            elif self.truncation == "right":
-                input_ids = input_ids[: self.max_length]
-                attention_mask = attention_mask[: self.max_length]
-                loss_mask = loss_mask[: self.max_length]
-            elif self.truncation == "error":
-                raise ValueError(f"{sequence_length=} is larger than {self.max_length=}")
-            else:
-                raise ValueError(f"Unknown truncation method {self.truncation}")
-
-        # Create position IDs
-        # For Qwen2VL and Qwen2.5-VL, we may need special position ID handling
-        # Both Qwen2-VL and Qwen2.5-VL use Qwen2VLImageProcessor
-        if self.processor is not None and "Qwen2VLImageProcessor" in str(type(self.processor.image_processor)):
-            from verl.models.transformers.qwen2_vl import get_rope_index
-            position_ids = [
-                get_rope_index(
-                    self.processor,
-                    input_ids=input_ids,
-                    image_grid_thw=multi_modal_inputs.get("image_grid_thw") if multi_modal_inputs else None,
-                    video_grid_thw=multi_modal_inputs.get("video_grid_thw") if multi_modal_inputs else None,
-                    second_per_grid_ts=multi_modal_inputs.get("second_per_grid_ts") if multi_modal_inputs else None,
-                    attention_mask=attention_mask,
-                )
-            ]
-            position_ids = position_ids[0]  # Extract from list
-        else:
-            position_ids = torch.arange(len(input_ids), dtype=torch.long)
-            # Zero out position IDs for padding
-            position_ids = position_ids * attention_mask
-
+        # TRL's DataCollatorForVisionLanguageModeling expects "messages" and optionally "images"
+        # Return the format that TRL's collator expects - no tokenization needed here
         result = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-            "loss_mask": loss_mask,
+            "messages": messages,  # Original messages format for TRL
         }
+        
+        # Add images if available (TRL expects "images" key, not "image")
+        # Note: For TRL, we should return raw image data, not processed images
+        # But let's keep processed images for now and see if TRL can handle them
+        if images is not None:
+            result["images"] = images
+        
+        # Add tools and enable_thinking if available (for TRL's collator)
+        if tools is not None:
+            result["tools"] = tools
+        if enable_thinking is not None:
+            result["enable_thinking"] = enable_thinking
 
-        # Add multimodal data if available
-        if multi_modal_data:
-            result["multi_modal_data"] = multi_modal_data
-
-        if multi_modal_inputs and self.return_multi_modal_inputs:
-            result["multi_modal_inputs"] = multi_modal_inputs
+        # Final validation: ensure result is not empty
+        if not result or len(result) == 0:
+            raise ValueError(f"Empty result dictionary for item {item}. This should not happen.")
+        
+        # Ensure required keys are present for TRL
+        if "messages" not in result:
+            raise ValueError(f"Missing required key 'messages' in result for item {item}")
 
         return result

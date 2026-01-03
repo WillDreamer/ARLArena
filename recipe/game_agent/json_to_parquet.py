@@ -92,14 +92,14 @@ def main():
         "--input_dir",
         type=str,
         help="Input directory containing JSON files",
-        default="/home/ubuntu/Yidan/ARLArena/checkpoints/sft",
+        default="/data1/dannie/projects/ARLArena/checkpoints/sft",
         required=False
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         help="Output directory for Parquet files",
-        default="/home/ubuntu/Yidan/ARLArena/checkpoints/sft/parquet",
+        default="/data1/dannie/projects/ARLArena/checkpoints/sft/parquet",
         required=False
     )
     
