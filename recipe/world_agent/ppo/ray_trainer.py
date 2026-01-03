@@ -379,7 +379,7 @@ class WorldAgentTrainer(RayPPOTrainer):
                     self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
                     print(f"Set max_response_len_per_turn to {self.config.data.max_response_length} for DRGRPO")
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, advantages=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
@@ -405,6 +405,8 @@ class WorldAgentTrainer(RayPPOTrainer):
             analysis_data["entropy"] = to_jsonable(entropy)
         if ref_log_probs is not None:
             analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
+        if advantages is not None:
+            analysis_data["advantages"] = to_jsonable(advantages)
 
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
@@ -1058,6 +1060,7 @@ class WorldAgentTrainer(RayPPOTrainer):
                             log_probs = actor_output.batch["log_prob"]
                             old_log_probs = actor_output.batch["old_log_prob"]
                             entropy = actor_output.batch["entropy"]
+                            advantages = actor_output.batch["advantages"][:, 0]
 
                             if actor_output.batch.get("ref_log_prob") is not None:
                                 ref_log_probs = actor_output.batch["ref_log_prob"]
@@ -1074,6 +1077,7 @@ class WorldAgentTrainer(RayPPOTrainer):
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
+                                advantages=advantages,
                                 ref_log_probs=ref_log_probs,
                                 dump_path=rollout_data_dir,
                             )

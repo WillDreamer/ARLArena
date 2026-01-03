@@ -403,6 +403,7 @@ class DataParallelPPOActor(BasePPOActor):
             "old_log_prob": [],
             "entropy": [],
             "input_ids": [],
+            "advantages": [],
         }
         if self.config.use_kl_loss:
             logprobs_dp["ref_log_prob"] = []
@@ -454,6 +455,7 @@ class DataParallelPPOActor(BasePPOActor):
                     else:
                         entropy = torch.zeros_like(log_prob)
                         logprobs_dp["entropy"].append(torch.zeros_like(log_prob))
+                    logprobs_dp["advantages"].append(advantages.detach().cpu())
 
                     if on_policy:
                         curr_old_log_prob = log_prob.detach()
