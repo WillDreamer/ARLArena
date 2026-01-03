@@ -22,7 +22,7 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+estimator="grpo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
@@ -54,7 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL"
+    experiment_name="Seed${seed}_seq_mask_${MODEL_SHORT}_${estimator}_w_KL"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
@@ -80,6 +80,7 @@ do
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+        actor_rollout_ref.actor.policy_loss.loss_mode="seq_mask" \
         actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
         actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
         actor_rollout_ref.rollout.name=$ENGINE \

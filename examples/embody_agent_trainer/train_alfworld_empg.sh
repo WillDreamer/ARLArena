@@ -22,18 +22,18 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+estimator="empg"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-# if pgrep -f "ray" > /dev/null; then
+# if pgrep -u "$USER" "ray" > /dev/null; then
 #     echo "==================== Detected existing Ray processes, exiting... ===================="
 #     echo "==================== run "ray stop" to stop ray ===================="
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1110
-ray start --head --port $PORT --dashboard-port=1029
+PORT=1113
+ray start --head --port $PORT --dashboard-port=1032
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -55,6 +55,7 @@ python3 -m examples.data_preprocess.prepare \
 for seed in 0
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL"
+    # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
