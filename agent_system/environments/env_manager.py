@@ -406,7 +406,7 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
         return observations, infos
 
     def step(self, text_actions: List[str]):
-        actions, valids = self.projection_f(text_actions)
+        actions, valids, format_valids = self.projection_f(text_actions)
         next_obs, rewards, dones, infos = self.envs.step(actions)
 
         next_obs = self.format_obs(next_obs)
@@ -422,6 +422,7 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
         # add action_valid to infos
         for i, info in enumerate(infos):
             info['is_action_valid'] = to_numpy(valids[i])
+            info['is_response_format_valid'] = to_numpy(format_valids[i])
 
         rewards = to_numpy(rewards)
         dones = to_numpy(dones)

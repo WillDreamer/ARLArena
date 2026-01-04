@@ -4,8 +4,10 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 ulimit -n 1048576
 
+export RAY_TMPDIR="/data2/whx/ray_out"
+
 # ======================== GPU auto selection ========================
-GPU_LIST=(6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -14,7 +16,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-export RAY_TMPDIR="/data2/whx/ray_out"
+
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -35,7 +37,7 @@ MODEL_SHORT="${MODEL##*/}"
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
 estimator="grpo" 
 project_name="ARLArena_webshop"
-max_response_length=500
+max_response_length=512
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
@@ -53,9 +55,9 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2)) # evaluate 2 × val_data_size tasks during each iteration
 
-for seed in 0 42
+for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -89,6 +91,8 @@ do
         actor_rollout_ref.rollout.enforce_eager=True \
         actor_rollout_ref.rollout.free_cache_engine=False \
         actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
+        actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
+        actor_rollout_ref.rollout.val_kwargs.top_k=20 \
         actor_rollout_ref.rollout.val_kwargs.do_sample=True \
         actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
         actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -110,7 +114,7 @@ do
         trainer.nnodes=1 \
         trainer.save_freq=10 \
         trainer.test_freq=10 \
-        trainer.total_epochs=150 \
+        trainer.total_epochs=200 \
         trainer.max_actor_ckpt_to_keep=2 \
         trainer.val_before_train=False $@ | tee -a outputs/${experiment_name}.log
 done

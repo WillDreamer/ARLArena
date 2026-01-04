@@ -547,7 +547,7 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
 ## ================================================================
 # 📄 The loss function is implemented in ARLArena/verl/trainer/ppo/core_algos.py under
 #    @register_policy_loss("vanilla")
-def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
+def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.05):
     """
     Args:
         tokenizer: The tokenizer for identifying response segments.
@@ -558,7 +558,12 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
     """
 
     # --- 1. Calculate Modulated Advantage Components ---
-    H = np.mean(np.array(batch.batch['old_entropy']) * batch.batch['response_mask'], axis=1,keepdims=True)
+    H = np.array(batch.batch['old_entropy'])
+    mask = np.array(batch.batch['response_mask'])
+
+    nume = (H * mask).sum(axis=-1, keepdims=True)
+    deno = mask.sum(axis=-1, keepdims=True)
+    H = nume / np.maximum(deno, 1)
     # Batch-level entropy normalization (Eq. 12) with epsilon = 1e-8
     min_H, max_H = np.min(H), np.max(H)
     H_norm = (H - min_H) / (max_H - min_H + 1e-8)
@@ -575,7 +580,7 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
 
     # --- 2. Group into trajectories ---
     
-    steps2traj_f_H = defaultdict(list)  # key: (idx, traj), value: list of step-score tensors
+    steps2traj_f_H = defaultdict(dict)  # key: (idx, traj), value: list of step-score tensors
     with torch.no_grad():
         bsz = batch.batch.batch_size[0]
         for i in range(bsz):
@@ -585,12 +590,13 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
                 turn_idx = int(m.group(1))
             else:
                 turn_idx = 0
-            key = (batch.non_tensor_batch['traj_uid'][i], turn_idx)
-            steps2traj_f_H[key].append(batch.batch['f_entropy'][i])
+            traj_uid = batch.non_tensor_batch['traj_uid'][i]
+            steps2traj_f_H[traj_uid][turn_idx] = batch.batch['f_entropy'][i, 0]
 
     # --- 3. Second Pass: Apply Advantage Modulation (Eq. 8) ---
     for i in range(batch.batch.batch_size[0]):
-        
+        raw_prompt = batch.non_tensor_batch['raw_prompt'][i][0]['content']
+        traj_uid = batch.non_tensor_batch['traj_uid'][i]
         # Apply self-calibrating gradient scaling
         batch.batch['advantages'][i] *= g_H[i]
 
@@ -600,11 +606,10 @@ def compute_EMPG_advantage(batch, k=1.0, k_f=1.0, zeta=0.1):
         else:
             turn_idx = 0
         
-        if turn_idx+1 < len(steps2traj_f_H[key]):
-            f_H_key = (batch.non_tensor_batch['traj_uid'][i], turn_idx+1)
-            batch.batch['advantages'] += zeta * steps2traj_f_H[f_H_key]
+        if turn_idx+1 < len(steps2traj_f_H[traj_uid]):
+            batch.batch['advantages'] += zeta * steps2traj_f_H[traj_uid][turn_idx + 1]
         
-        batch.batch['advantages'] -= torch.mean(batch.batch['advantages'])
+    batch.batch['advantages'] -= torch.mean(batch.batch['advantages'])
 
     return batch.batch['advantages'], batch.batch['advantages']
 
