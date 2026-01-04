@@ -397,14 +397,13 @@ class DataParallelPPOActor(BasePPOActor):
         on_policy = len(mini_batches) == 1 and self.config.ppo_epochs == 1
 
         metrics = {}
-        # 初始化logprobs信息为DataProto格式
-        from verl.protocol import DataProto
 
         logprobs_dp = {
             "log_prob": [],
             "old_log_prob": [],
             "entropy": [],
-            "token_ids": [],
+            "input_ids": [],
+            "advantages": [],
         }
         if self.config.use_kl_loss:
             logprobs_dp["ref_log_prob"] = []
@@ -450,12 +449,13 @@ class DataParallelPPOActor(BasePPOActor):
 
                     #* 收集micro_batch信息到logprobs_dp字典
                     logprobs_dp["log_prob"].append(log_prob.detach().cpu())
-                    logprobs_dp["token_ids"].append(model_inputs["input_ids"].detach().cpu())
+                    logprobs_dp["input_ids"].append(model_inputs["input_ids"].detach().cpu())
                     if entropy is not None:
                         logprobs_dp["entropy"].append(entropy.detach().cpu())
                     else:
                         entropy = torch.zeros_like(log_prob)
                         logprobs_dp["entropy"].append(torch.zeros_like(log_prob))
+                    logprobs_dp["advantages"].append(advantages.detach().cpu())
 
                     if on_policy:
                         curr_old_log_prob = log_prob.detach()
@@ -536,11 +536,10 @@ class DataParallelPPOActor(BasePPOActor):
                 append_to_dict(metrics, mini_batch_metrics)
         self.actor_optimizer.zero_grad()
 
-        # 拼接所有收集到的结果，并包装为DataProto对象
-        dp_batch = {}
-        # 检查每个项是否有内容，拼接
+        # collect and concatenate logprobs information
+        collect_log_probs = {}
         for k, v in logprobs_dp.items():
             if len(v) > 0:
-                dp_batch[k] = torch.cat(v, dim=0)
-        collect_logprobs = DataProto.from_single_dict(dp_batch)
-        return collect_logprobs, metrics
+                collect_log_probs[k] = torch.cat(v, dim=0)
+
+        return collect_log_probs, metrics

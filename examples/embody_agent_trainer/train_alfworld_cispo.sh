@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -22,18 +22,18 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
-estimator="gigpo"
+estimator="cispo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-# if pgrep -f "ray" > /dev/null; then
+# if pgrep -u "$USER" "ray" > /dev/null; then
 #     echo "==================== Detected existing Ray processes, exiting... ===================="
 #     echo "==================== run "ray stop" to stop ray ===================="
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1110
-ray start --head --port $PORT --dashboard-port=1029
+PORT=1114
+ray start --head --port $PORT --dashboard-port=1033
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -52,9 +52,10 @@ python3 -m examples.data_preprocess.prepare \
     --val_data_size $val_data_size
 
 # for seed in 0 42 33
-for seed in 0
+for seed in 42
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_w/o_lower_bound"
+    # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
@@ -77,6 +78,7 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+        actor_rollout_ref.actor.clip_ratio_low=1.0 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
