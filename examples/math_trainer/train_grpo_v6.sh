@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(1 2 3 4)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3 4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -33,13 +33,13 @@ VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datas
 ROLLOUT_GPU_MEMORY_UTIL=0.3
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-1.7B
+MODEL_NAME=Qwen/Qwen3-1.7B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
-REMOVE_CLIP=False #mask for now
-REMOVE_EXTRA_VOID_TURN=False
+REMOVE_CLIP=True #mask for now
+REMOVE_EXTRA_VOID_TURN=True
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
-REJECTION_SAMPLE=False
+REJECTION_SAMPLE=True
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -48,7 +48,7 @@ START_CLIP_STEP=20
 BALANCE_BATCH=True
 TOOL_USE=True
 BIASED_ADV=True
-OVERSAMPLE=1
+OVERSAMPLE=2
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
@@ -56,11 +56,11 @@ APPEND_FINAL_ANSWER_FUNC=True
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
+RESUME=True
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r6144_n5_r3_1.7B_grpo_bs512_mbs128_seq6144_lr1e-6
+RUN_NAME=math_p4096_r6144_n5_r3_1.7B-Base_grpo_bs512_mbs128_seq6144_lr1e-6_rmclip_rmvoid_os2
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME

@@ -9,37 +9,37 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-
-source /data1/xw27/miniconda3/etc/profile.d/conda.sh
-cd /home/xw27/agent/ARLArena
+PATH_PREFIX=/home/xw27/agent/ARLArena
+source /home/xw27/anaconda3/etc/profile.d/conda.sh
+cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
-MAX_TURNS=5
+MAX_TURNS=3
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=8
+ROLLOUT_N=5
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
-VAL_BEFORE_TRAIN=True
-MAX_PROMPT_LENGTH=16000
-MAX_RESPONSE_LENGTH=16000
+VAL_BEFORE_TRAIN=False
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=6144
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=32000
-TOTAL_EPOCHS=4
-TRAIN_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/train" "/home/xw27/agent/ARLArena/datasets/deepscaler/train")
-# VALID_DATASET=("/home/xw27/agent/ARLArena/dataset/simplelr_math_35/test")
-VALID_DATASET=("/home/xw27/agent/ARLArena/datasets/simplelr_math_35/test" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime" "/home/xw27/agent/ARLArena/datasets/deepscaler/aime25" "/home/xw27/agent/ARLArena/datasets/deepscaler/olympiad_bench")
-ROLLOUT_GPU_MEMORY_UTIL=0.4
+PPO_MICRO_TOKEN=24000
+TOTAL_EPOCHS=2
+TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
+VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
+ROLLOUT_GPU_MEMORY_UTIL=0.6
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-4B
+MODEL_NAME=Qwen/Qwen3-1.7B-Base
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=True #mask for now
-ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1
-REJECTION_SAMPLE=False
+REMOVE_EXTRA_VOID_TURN=True
+ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
+REJECTION_SAMPLE=True
 SP_SIZE=1
 GRAD_CLIP=1.0
 ACTOR_LR=1e-6
@@ -52,19 +52,19 @@ OVERSAMPLE=2
 VAL_ONLY=False
 LOG_VAL_GENERATIONS=64
 OUTPUT_ACC_TO_FILE=False
-CONFIG_NAME=simpletir_trainer
+APPEND_FINAL_ANSWER_FUNC=True
+CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
-PROJECT_NAME=simpletir_math
+RESUME=True
+PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=simpletir_math_p8000_r8000_n4_4B_sample_grpo_data_dir
+RUN_NAME=math_p4096_r6144_n5_r3_1.7B-Base_grpo_bs512_mbs128_seq6144_lr1e-6_rmclip_rmvoid_os2
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
 ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
-VALIDATION_DATA_DIR=/local/xw27/ARLArena/validation_data_$RUN_NAME
 mkdir -p $CHECKPOINT_PATH
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
@@ -221,10 +221,11 @@ export TMPDIR="$RAY_TMP"
 #     echo "==================== Detected existing Ray processes, exiting... ===================="
 #     exit 1
 # fi
+# ray stop
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1338
-DASHBOARD_PORT=1339
+PORT=1368
+DASHBOARD_PORT=1369
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -295,7 +296,7 @@ echo "CONFIG_NAME: $CONFIG_NAME"
 # ======================== wandb ========================
 export SANDBOX_ENDPOINT=http://127.0.0.1:12345/faas/sandbox/
 # export WANDB_ENTITY="RL_Reasoning"
-export WANDB_PROMPT_VERSION="simpletir"
+export WANDB_PROMPT_VERSION="math_agent"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
 WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 # Login to WandB (if API key is provided)
@@ -308,7 +309,7 @@ WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 
 
 
-PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
+PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
     algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
@@ -357,13 +358,14 @@ PYTHONUNBUFFERED=1 python -m recipe.simpletir.main_simpletir \
     trainer.resume_mode=$RESUME_MODE \
     trainer.resume_from_path=$RESUME_FROM_PATH \
     trainer.balance_batch=$BALANCE_BATCH \
+    trainer.remove_extra_void_turn=$REMOVE_EXTRA_VOID_TURN \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
+    agent.append_final_answer_func=$APPEND_FINAL_ANSWER_FUNC \
     data.max_start_length=4096 \
     data.max_obs_length=$MAX_OBS_LENGTH \
     trainer.val_only=$VAL_ONLY \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
     +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
-    +trainer.validation_data_dir=$VALIDATION_DATA_DIR \
     trainer.max_actor_ckpt_to_keep=2 \
     | tee -a $LOG_FILE_PATH
