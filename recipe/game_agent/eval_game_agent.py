@@ -164,22 +164,23 @@ def main(config):
                     
                     for turn in response_texts:
                         # turn['inputs']和turn['outputs']都是n个sample
-                        image_serialized = None
-                        img_obj = turn["images"]
-                        print(f"image for turn {turn['step']} shape: {img_obj.shape}")
-                        turn_result = {
-                            "step": turn.get('step', None),
-                            "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
-                            "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None,
-                            "image": image_serialized
-                        }
-                        turns.append(turn_result)
+                        active_masks = turn["active_masks"]
+                        if active_masks[sample_idx]:
+                            image_serialized = None
+                            img_obj = turn["images"]
+                            print(f"image for turn {turn['step']} shape: {img_obj.shape}")
+                            turn_result = {
+                                "step": turn.get('step', None),
+                                "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
+                                "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None,
+                                "image": image_serialized
+                            }
+                            turns.append(turn_result)
 
                     all_turns.append({
                         "sample_idx": sample_idx,
                         "task_score": score,
-                        "turns": turns,
-                        "images": image_serialized  # Serialized image for the entire conversation
+                        "turns": turns
                     })
 
             with open(output_path, "w", encoding="utf-8") as f:

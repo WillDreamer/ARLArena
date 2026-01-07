@@ -376,6 +376,7 @@ class TrajectoryCollector:
             # Add images if available (for this step, though they're usually the same across steps)
             if images_per_sample is not None:
                 step_record["image"] = deepcopy(images_per_sample)
+                step_record["active_masks"] = deepcopy(active_masks)
             step_io_history.append(step_record)
             # ===============================================
 
