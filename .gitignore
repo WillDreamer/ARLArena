@@ -140,3 +140,4 @@ agent_system/environments/env_package/webshop/webshop/dataset/items_ins_v2_1000.
 agent_system/environments/env_package/webshop/webshop/dataset/items_shuffle_1000.json
 
 examples/game_agent_trainer/rollout_traces/
+CLAUDE.md

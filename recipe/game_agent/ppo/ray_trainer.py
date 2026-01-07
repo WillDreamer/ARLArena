@@ -377,7 +377,7 @@ class GameAgentTrainer(RayPPOTrainer):
                     self.config.actor_rollout_ref.actor.max_response_len_per_turn = self.config.data.max_response_length
                     print(f"Set max_response_len_per_turn to {self.config.data.max_response_length} for DRGRPO")
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, output_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, ref_log_probs=None):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, input_ids_list=None, log_probs=None, old_log_probs=None, entropy=None, advantages=None, ref_log_probs=None):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
@@ -395,8 +395,6 @@ class GameAgentTrainer(RayPPOTrainer):
         analysis_data = {}
         if input_ids_list is not None:
             analysis_data["input_ids"] = to_jsonable(input_ids_list)
-        if output_ids_list is not None:
-            analysis_data["output_ids"] = to_jsonable(output_ids_list)
         if log_probs is not None:
             analysis_data["log_probs"] = to_jsonable(log_probs)
         if old_log_probs is not None:
@@ -405,6 +403,8 @@ class GameAgentTrainer(RayPPOTrainer):
             analysis_data["entropy"] = to_jsonable(entropy)
         if ref_log_probs is not None:
             analysis_data["ref_log_probs"] = to_jsonable(ref_log_probs)
+        if advantages is not None:
+            analysis_data["advantages"] = to_jsonable(advantages)
 
         for k, v in reward_extra_infos_dict.items():
             if len(v) == n:
@@ -798,7 +798,6 @@ class GameAgentTrainer(RayPPOTrainer):
         from omegaconf import OmegaConf
 
         from verl.utils.tracking import Tracking
-        # breakpoint()
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -931,15 +930,15 @@ class GameAgentTrainer(RayPPOTrainer):
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw):
-                        
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
-
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
                         entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
+                        old_entropy = old_log_prob.batch["entropys"]
+                        batch = batch.union(DataProto.from_single_dict({"old_entropy": old_entropy}))
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
@@ -1053,15 +1052,14 @@ class GameAgentTrainer(RayPPOTrainer):
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
                             #* Newly added metrics
-                            input_ids_list = batch.batch["prompts"].cpu().tolist()
-                            output_ids_list = batch.batch["responses"].cpu().tolist()
-                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
-                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
-                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
-                            
+                            input_ids_list = actor_output.batch["input_ids"].tolist()
+                            log_probs = actor_output.batch["log_prob"]
+                            old_log_probs = actor_output.batch["old_log_prob"]
+                            entropy = actor_output.batch["entropy"]
+                            advantages = actor_output.batch["advantages"][:, 0]
 
-                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
-                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            if actor_output.batch.get("ref_log_prob") is not None:
+                                ref_log_probs = actor_output.batch["ref_log_prob"]
                             else:
                                 ref_log_probs = None
 
@@ -1072,10 +1070,10 @@ class GameAgentTrainer(RayPPOTrainer):
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
                                 input_ids_list=input_ids_list,
-                                output_ids_list=output_ids_list,
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
+                                advantages=advantages,
                                 ref_log_probs=ref_log_probs,
                                 dump_path=rollout_data_dir,
                             )
