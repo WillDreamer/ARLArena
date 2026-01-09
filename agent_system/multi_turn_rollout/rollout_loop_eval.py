@@ -355,11 +355,19 @@ class TrajectoryCollector:
 
             # ====== 记录当前step的inputs/outputs ==============
             # 这里保存batch_input和batch_output的DataProto实例的deepcopy(Small batches，deepcopy不大)
-            from copy import deepcopy
+            # 根据active_masks，把inactive的对应位置替换成None
+            import copy
+            current_inputs = copy.deepcopy(batch_input.non_tensor_batch['raw_prompt'])
+            current_outputs = copy.deepcopy(batch_output.non_tensor_batch['response_texts'])
+            # active_masks是1/0的np.bool_，长度=batch_size
+            for idx, am in enumerate(active_masks):
+                if not am:
+                    current_inputs[idx] = None
+                    current_outputs[idx] = None
             step_io_history.append({
                 "step": _step,
-                "inputs": deepcopy(batch_input.non_tensor_batch['raw_prompt']),
-                "outputs": deepcopy(batch_output.non_tensor_batch['response_texts'])
+                "inputs": current_inputs,
+                "outputs": current_outputs
             })
             # ===============================================
 
