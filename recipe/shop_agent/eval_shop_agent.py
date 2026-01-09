@@ -107,15 +107,17 @@ def main(config):
             # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
             all_turns = []
             for sample_idx, score in enumerate(task_scores):
-                if score is not None and score > 0.9:
+                if score > 0.9:
                     turns = []
                     # response_texts为每轮list，每轮包含该batch（n）的信息
                     for turn in response_texts:
                         # turn['inputs']和turn['outputs']都是n个sample
+                        if turn.get('inputs', None)[sample_idx] is None:
+                            continue
                         turn_result = {
                             "step": turn.get('step', None),
-                            "inputs": list(turn.get('inputs', []))[sample_idx] if turn.get('inputs', None) is not None else None,
-                            "outputs": list(turn.get('outputs', []))[sample_idx] if turn.get('outputs', None) is not None else None
+                            "inputs": list(turn.get('inputs', []))[sample_idx],
+                            "outputs": list(turn.get('outputs', []))[sample_idx]
                         }
                         turns.append(turn_result)
                     all_turns.append({

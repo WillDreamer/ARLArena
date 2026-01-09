@@ -14,7 +14,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=Qwen/Qwen3-0.6B
 
 PORT=$(( ( RANDOM % 10000 +1000) ))
 ray status >/dev/null 2>&1 || ray start --head --port $PORT --dashboard-host=0.0.0.0 --dashboard-port=7777 --include-dashboard=true
