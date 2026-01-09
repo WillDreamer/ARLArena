@@ -30,7 +30,7 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=willamazon1/Qwen3-4B-rft-webshop
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
@@ -57,7 +57,7 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error_kl"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -77,7 +77,8 @@ do
         actor_rollout_ref.actor.ppo_mini_batch_size=128 \
         actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
         actor_rollout_ref.actor.use_kl_loss=True \
-        actor_rollout_ref.actor.kl_loss_update=False \
+        actor_rollout_ref.actor.kl_loss_update=True \
+        actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=True \
@@ -106,7 +107,7 @@ do
         env.rollout.n=$group_size \
         env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
         trainer.critic_warmup=0 \
-        trainer.rollout_data_dir=./outputs/${experiment_name} \
+        trainer.rollout_data_dir=./outputs/${project_name}/${experiment_name} \
         trainer.logger=['console','wandb'] \
         trainer.project_name=$project_name \
         trainer.experiment_name=$experiment_name \

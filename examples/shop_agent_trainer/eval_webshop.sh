@@ -4,6 +4,16 @@ ulimit -n 131072
 export MKL_THREADING_LAYER=GNU
 unset MKL_SERVICE_FORCE_INTEL
 
+# ======================== GPU auto selection ========================
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+# Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
+CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
+export CUDA_VISIBLE_DEVICES
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+# Automatically detect the number of n_gpus_per_node
+NUM_GPUS=${#GPU_LIST[@]}
+echo "Detected ${NUM_GPUS} GPUs for this run"
+
 MODEL=Qwen/Qwen3-4B
 
 PORT=$(( ( RANDOM % 10000 +1000) ))
