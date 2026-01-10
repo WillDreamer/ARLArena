@@ -28,7 +28,7 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size 256 \
     --val_data_size 256 # evaluate 2 × val_data_size tasks during each iteration
 
-python3 -m recipe.shop_agent.eval_shop_agent \
+python3 -m recipe.world_agent.eval_world_agent \
     data.train_files=$HOME/data/text/train.parquet \
     data.val_files=$HOME/data/text/test.parquet \
     data.train_batch_size=256 \
@@ -50,7 +50,7 @@ python3 -m recipe.shop_agent.eval_shop_agent \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    env.env_name=Webshop \
+    env.env_name=alfworld/AlfredTWEnv \
     env.seed=0 \
-    env.max_steps=15 \
+    env.max_steps=50 \
     env.rollout.n=1
