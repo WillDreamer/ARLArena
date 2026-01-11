@@ -6,6 +6,7 @@ from verl import DataProto
 import hydra
 import os
 import time
+import json
 from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -47,7 +48,7 @@ def main(config):
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=256,
+            batch_size=config.data.val_batch_size,
             num_workers=8,
             shuffle=True,
             drop_last=False,
@@ -91,18 +92,47 @@ def main(config):
 
     
         start_time = time.time()
-        rollouts, metrics = traj_collector.multi_turn_loop_for_eval(
+
+        result = traj_collector.multi_turn_loop_for_eval(
                         gen_batch=test_gen_batch,
                         actor_rollout_wg=actor_wg,
                         envs=envs
                         )
+
+        task_scores = result['success'].get('text_test_score', None)
+        response_texts = result['step_io_history']
+
+        if task_scores is not None and response_texts is not None:
+            
+            output_path = f'/data1/whx/ARLArena/alfworld_high_score_multiturn_texts_seed{config.env.seed}.json'
+            # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
+            all_turns = []
+            for sample_idx, score in enumerate(task_scores):
+                if score > 0.9:
+                    turns = []
+                    # response_texts为每轮list，每轮包含该batch（n）的信息
+                    for turn in response_texts:
+                        # turn['inputs']和turn['outputs']都是n个sample
+                        if turn.get('inputs', None)[sample_idx] is None:
+                            continue
+                        turn_result = {
+                            "step": turn.get('step', None),
+                            "inputs": list(turn.get('inputs', []))[sample_idx],
+                            "outputs": list(turn.get('outputs', []))[sample_idx]
+                        }
+                        turns.append(turn_result)
+                    all_turns.append({
+                        "sample_idx": sample_idx,
+                        "task_score": score,
+                        "turns": turns
+                    })
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(all_turns, f, ensure_ascii=False, indent=2)
+            print(f"Saved all {len(all_turns)} turns of the multi-turn dialogue to {output_path}")
         
         end_time = time.time()
         print(f'rollout time: {end_time - start_time} seconds')
-        # print rollout rewards from the rm_scores
-        print(f'metrics:')
-        for k, v in metrics.items():
-            print(f'{k}: {v}')
 
 if __name__ == "__main__":
     main()
