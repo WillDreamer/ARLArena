@@ -48,7 +48,7 @@ def main(config):
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=256,
+            batch_size=config.data.val_batch_size,
             num_workers=8,
             shuffle=True,
             drop_last=False,
@@ -104,7 +104,7 @@ def main(config):
 
         if task_scores is not None and response_texts is not None:
             
-            output_path = f'alfworld_high_score_multiturn_texts_seed{config.env.seed}.json'
+            output_path = f'/data1/whx/ARLArena/alfworld_high_score_multiturn_texts_seed{config.env.seed}.json'
             # response_texts是长度为15的列表，每个元素包含dict_keys(['step', 'inputs', 'outputs'])
             all_turns = []
             for sample_idx, score in enumerate(task_scores):

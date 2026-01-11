@@ -23,18 +23,20 @@ export RAY_TMPDIR="/data2/whx/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
+data_size=128
+
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
     --train_data_size 256 \
-    --val_data_size 256 # evaluate 2 × val_data_size tasks during each iteration
+    --val_data_size 2560 # evaluate 2 × val_data_size tasks during each iteration
 
 python3 -m recipe.world_agent.eval_world_agent \
     data.train_files=$HOME/data/text/train.parquet \
     data.val_files=$HOME/data/text/test.parquet \
-    data.train_batch_size=256 \
-    data.val_batch_size=256 \
+    data.train_batch_size=${data_size} \
+    data.val_batch_size=${data_size} \
     data.max_prompt_length=4096 \
-    data.max_response_length=500 \
+    data.max_response_length=512 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
