@@ -2,7 +2,7 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
 export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
@@ -28,13 +28,13 @@ mode="mean_std_norm"
 # ========== 模型配置 ==========
 # 使用合并后的模型作为初始模型
 # 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
-MERGED_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-merged"
-MODEL=${MERGED_MODEL}  # 使用合并后的模型
+SFT_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-sft-with-visual"
+MODEL=${SFT_MODEL}  # 使用合并后的模型
 
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_rft"
-estimator="cispo"
+estimator="empg"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -123,7 +123,8 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=150 \
+    trainer.total_epochs=200 \
     trainer.val_before_train=False \
+    trainer.max_actor_ckpt_to_keep=3 \
     trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
     critic.model.path=$Critic_MODEL $@
