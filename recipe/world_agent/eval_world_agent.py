@@ -126,6 +126,7 @@ def main(config):
                         "task_score": score,
                         "turns": turns
                     })
+            print(f"all_turns: {all_turns}")
 
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(all_turns, f, ensure_ascii=False, indent=2)
