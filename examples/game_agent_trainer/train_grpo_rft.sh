@@ -28,21 +28,20 @@ mode="mean_std_norm"
 # ========== 模型配置 ==========
 # 使用合并后的模型作为初始模型
 # 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
-SFT_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-sft-with-visual"  # 你的合并后模型路径，或 HuggingFace ID
+SFT_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-sft-with-visual"
 MODEL=${SFT_MODEL}  # 使用合并后的模型
-
-# 原始 base model（如果需要的话）
-# MODEL=Qwen/Qwen3-VL-4B-Instruct
 
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
-project_name="verl_agent_sokoban_grpo_debug"
+project_name="verl_agent_sokoban_rft"
 estimator="grpo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
-WANDB_API_KEY="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" # Modify your wandb key
+# WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
+WANDB_API_KEY="59e47d8e42ea78659419eee486a5c4e4a26e7c4e" # Modify your wandb key
+
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
@@ -51,13 +50,6 @@ if [ "$WANDB_API_KEY" != "" ]; then
     SAVE_PATH=wandb/${project_name}/${experiment_name}
     export WANDB_DIR=${SAVE_PATH}
 fi
-
-# Check if any ray processes are running, exit if present, otherwise start ray
-# if pgrep -f "ray" > /dev/null; then
-#     echo "==================== Detected existing Ray processes, exiting... ===================="
-#     exit 1
-# fi
-
 
 PORT=$(( ( RANDOM % 999 ) + 1001 ))
 DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
@@ -75,14 +67,16 @@ mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment
 
 python3 -m recipe.game_agent.main_game_agent_ablation \
     algorithm.adv_estimator=$estimator \
+    algorithm.adv_estimator=$estimator \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
     data.max_prompt_length=1024 \
-    data.max_response_length=500 \
+    data.max_response_length=512 \
     data.filter_overlong_prompts=True \
-    data.truncation='left' \
+    data.truncation='error' \
+    data.image_key=images \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=$MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
@@ -102,11 +96,11 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.mode=$ROLLOUT_MODE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.7 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -129,9 +123,8 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=150 \
-    trainer.val_before_train=False "$@" \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
-    critic.model.path=$Critic_MODEL \
+    trainer.total_epochs=250 \
+    trainer.val_before_train=False \
     trainer.max_actor_ckpt_to_keep=3 \
-    algorithm.filter_groups.enable=False
+    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
+    critic.model.path=$Critic_MODEL $@
