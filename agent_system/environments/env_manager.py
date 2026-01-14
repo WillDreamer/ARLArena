@@ -281,12 +281,13 @@ class SokobanEnvironmentManager(EnvironmentManagerBase):
         return observations, infos
 
     def step(self, text_actions: List[str]):
-        actions, valids = self.projection_f(text_actions)
+        actions, valids, format_valids = self.projection_f(text_actions)
 
         next_obs, rewards, dones, infos = self.envs.step(actions)
 
         for i, info in enumerate(infos):
             info['is_action_valid'] = to_numpy(valids[i])
+            info['is_response_format_valid'] = to_numpy(format_valids[i])
 
         self.memory.store({'text_obs': self.pre_text_obs, 'action': [self.ACTION_LOOKUP[act] for act in actions]})
         if self.is_multi_modal:
