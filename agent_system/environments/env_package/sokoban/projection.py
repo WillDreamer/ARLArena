@@ -41,51 +41,60 @@ def sokoban_projection(actions: List[str]):
         "still": 0,
     }
 
+    format_valids = [0] * len(actions)
     valids = [0] * len(actions)
+
+    strict_pattern = re.compile(r'^\s*<think>(.*?)</think>\s*<action>(.*?)</action>\s*$', flags=re.IGNORECASE | re.DOTALL)
+    action_first_re = re.compile(r'<\s*action\s*>(.*?)</\s*action\s*>', flags=re.IGNORECASE | re.DOTALL)    
+
+    def count_tag(s: str, tag: str):
+        return len(re.findall(fr'<\s*{re.escape(tag)}\s*>', s, flags=re.IGNORECASE))
 
     for i in range(len(actions)):
         original_str = actions[i]  # keep the original string
         actions[i] = actions[i].lower()
+        # stay still if invalid
+        default_invalid_store = 0
 
-        # Attempt to extract the substring within <action>...</action>
-        start_tag = "<action>"
-        end_tag = "</action>"
-        start_idx = actions[i].find(start_tag)
-        end_idx = actions[i].find(end_tag)
-        try:
-            if start_idx == -1 or end_idx == -1:
-                # If we can't find a valid <action>...</action> block, mark as invalid
-                actions[i] = 0  # 0 is invalid action for Sokoban
-                continue
+        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', original_str))
 
-            # Extract just the content between the tags
-            extracted_action = actions[i][start_idx + len(start_tag):end_idx].strip().lower()
+        think_open_count = count_tag(original_str, 'think')
+        action_open_count = count_tag(original_str, 'action')
+        think_close_count = len(re.findall(r'</\s*think\s*>', original_str, flags=re.IGNORECASE))
+        action_close_count = len(re.findall(r'</\s*action\s*>', original_str, flags=re.IGNORECASE))
+        m = strict_pattern.match(original_str)
 
+        strict_ok = bool(m) and not has_chinese and (
+            think_open_count == think_close_count == 1 and action_open_count == action_close_count == 1
+        )
+
+        if strict_ok:
+            # perfectly formatted
+            extracted_action = m.group(2).strip().lower()
+            format_valids[i] = 1
             for act in action_pools.keys():
                 if act in extracted_action:
                     actions[i] = action_pools[act]
-                    # if found legal action, set valids to 1
                     valids[i] = 1
-                    break
+                else:
+                    actions[i] = default_invalid_store
+                    valids[i] = 0
+            continue
 
-            # If no valid action found, randomly select from pool
-            if valids[i] == 0:
-                actions[i] = 0
+        m2 = action_first_re.search(original_str)
+        if m2:
+            extracted_action = m2.group(1).strip().lower()
+            format_valids[i] = 0  # penalty: format not strictly valid
+            valids[i] = 0        # penalty: considered invalid even if extracted
+            for act in action_pools.keys():
+                if act in extracted_action:
+                    actions[i] = action_pools[act]
+                else:
+                    actions[i] = default_invalid_store
+            continue
 
-        except:
-            # randomly choose an action from the action list if illegal
-            actions[i] = 0
+        actions[i] = default_invalid_store
+        format_valids[i] = 0
+        valids[i] = 0
 
-        # check <think>...</think>
-        think_start_idx = original_str.find("<think>")
-        think_end_idx = original_str.find("</think>")
-        if think_start_idx == -1 or think_end_idx == -1:
-            valids[i] = 0
-
-        if re.search(r'[\u4e00-\u9fff]', original_str):
-            valids[i] = 0
-        
-        if think_end_idx > start_idx:
-            valids[i] = 0
-
-    return actions, valids
+    return actions, valids, format_valids
