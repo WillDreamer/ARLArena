@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -10,32 +10,52 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 PATH_PREFIX=/data1/xw27/agent/ARLArena
+# source /home/xw27/anaconda3/etc/profile.d/conda.sh
 source /data1/xw27/miniconda3/etc/profile.d/conda.sh
 cd $PATH_PREFIX
 conda activate agentrl_science
+# Check which conda installation and environment are being used
+echo "Conda executable: $(which conda)"
+echo "Conda installation: $(conda info --base)"
+echo "Active environment: $CONDA_DEFAULT_ENV"
+echo "Environment path: $CONDA_PREFIX" 
+
+# ======================== Environment variables ========================
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=ALL
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL  # or STRICT for desync detection
+# export TORCH_NCCL_TRACE_BUFFER_SIZE=2000  # Non-zero enables it
+# export TORCH_NCCL_DUMP_ON_TIMEOUT=1     # Auto-dump traces on timeout
+# export TORCH_NCCL_ENABLE_TIMING=1       # Optional: collective durations
+unset NCCL_DEBUG
+unset NCCL_DEBUG_SUBSYS
+unset TORCH_DISTRIBUTED_DEBUG
+unset TORCH_NCCL_TRACE_BUFFER_SIZE
+unset TORCH_NCCL_DUMP_ON_TIMEOUT
+unset TORCH_NCCL_ENABLE_TIMING
 # ======================== Hyper-parameters ========================
 MAX_TURNS=5
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
-N_VAL=4
+N_VAL=1
 ROLLOUT_N=5
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=0.6
-VAL_BEFORE_TRAIN=True
+VAL_BEFORE_TRAIN=False
 MAX_PROMPT_LENGTH=8192
 MAX_RESPONSE_LENGTH=4096
-MAX_OBS_LENGTH=256
+MAX_OBS_LENGTH=1024
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=30
-TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train_new")
-VALID_DATASET=("$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25")
-ROLLOUT_GPU_MEMORY_UTIL=0.5
-ACTOR_OPTIMIZER_OFFLOAD=False
-ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-4B-Base
-SAVE_FREQ=20
-TEST_FREQ=10
+# PPO_MICRO_TOKEN=8192
+TOTAL_EPOCHS=10
+TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
+VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
+ROLLOUT_GPU_MEMORY_UTIL=0.4
+ACTOR_OPTIMIZER_OFFLOAD=True
+ACTOR_PARAMETER_OFFLOAD=True
+MODEL_NAME=Qwen/Qwen3-4B-Instruct-2507
+SAVE_FREQ=10
+TEST_FREQ=25
 SANDBOX_RUN_TIMEOUT=10.0
 REMOVE_CLIP=True #mask for now
 REMOVE_EXTRA_VOID_TURN=True
@@ -57,11 +77,11 @@ APPEND_FINAL_ANSWER_FUNC=True
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
+RESUME=True
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r4096_n5_t5_4B_grpo_bs512_mbs128_lr1e-6_os2_rs_rc_void
+RUN_NAME=math_p8192_r8192_n5_r3_4B_instruct_grpo_bs512_mbs128_seq8192_lr1e-6_os2_rs_rc_void
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
@@ -222,11 +242,11 @@ export TMPDIR="$RAY_TMP"
 #     echo "==================== Detected existing Ray processes, exiting... ===================="
 #     exit 1
 # fi
-ray stop
+# ray stop
 PORT=$(( ( RANDOM % 10000 + 1000 ) ))
 DASHBOARD_PORT=$(( ( RANDOM % 10000 + 1000 ) ))
-PORT=1376
-DASHBOARD_PORT=1377
+PORT=1388
+DASHBOARD_PORT=1389
 # ray start --head --port 3334 --temp-dir "$RAY_TMP" --dashboard-port 3333
 ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
 RUN_NAME+="_$MODEL_NAME"
@@ -252,10 +272,14 @@ echo "Oversample Multiplier: $OVERSAMPLE"
 
 # set ppo micro token
 PPO_MICRO_TOKEN=$(generate_model_micro_token "$MODEL_NAME")
+PPO_MICRO_TOKEN=12288
 echo "PPO_MICRO_TOKEN: $PPO_MICRO_TOKEN"
-LOG_PROB_MICRO_TOKEN=$((PPO_MICRO_TOKEN * 2))
+# LOG_PROB_MICRO_TOKEN=$((PPO_MICRO_TOKEN * 2))
+LOG_PROB_MICRO_TOKEN=12288
 max_num_batched_tokens=$(expr $MAX_PROMPT_LENGTH + $MAX_RESPONSE_LENGTH + 1000)
 
+# LOG_PROB_MICRO_TOKEN=4096
+# max_num_batched_tokens=4096
 
 parse_acc_filter() {
     local acc_filter="$1"
@@ -370,4 +394,5 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     +trainer.output_acc_to_file=$OUTPUT_ACC_TO_FILE \
     +trainer.rollout_data_dir=$ROLLOUT_DATA_DIR \
     trainer.max_actor_ckpt_to_keep=2 \
+    data.shuffle=True \
     | tee -a $LOG_FILE_PATH
