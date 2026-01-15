@@ -28,7 +28,7 @@ if [[ -z "${CONDA_BASE}" ]]; then
   echo "Conda not found, please confirm it is installed (miniconda or anaconda)." >&2
   exit 1
 fi
-# CONDA_BASE=/data1/xw27/miniconda3
+# CONDA_BASE= or you may specify the path for your conda environment
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 
@@ -36,10 +36,10 @@ conda create -n agentrl_science python==3.12 -y
 conda activate agentrl_science
 python3 -m pip install uv
 
-mkdir -p datasets/simplelr_math_35
-mkdir -p datasets/deepscaler
-wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
-wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
+# mkdir -p datasets/simplelr_math_35
+# mkdir -p datasets/deepscaler
+# wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/test.parquet
+# wget -P datasets/simplelr_math_35 https://huggingface.co/datasets/hkust-nlp/SimpleRL-Zoo-Data/resolve/main/simplelr_qwen_level3to5/train.parquet
 
 
 # python3 -m uv pip install -e ".[sglang]"
@@ -49,9 +49,9 @@ python3 -m uv pip install flash-attn==2.8.3 --no-build-isolation --no-deps
 python3 -m uv pip install -r ./requirements.txt
 python3 -m uv pip install qwen_vl_utils
 python3 -m uv pip install word2number
-# sudo apt-get update && sudo apt-get install -y firejail
+sudo apt-get update && sudo apt-get install -y firejail
 python3 -m uv pip install "fastapi[all]" uvicorn
-### sudo 替换为 ->
+### if line52 failed or if you do not have sudo permission, then replace sudo with ->
 # cd $HOME
 # git clone https://github.com/netblue30/firejail.git
 # cd firejail
