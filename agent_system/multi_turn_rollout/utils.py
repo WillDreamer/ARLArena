@@ -16,7 +16,7 @@
 import torch
 import numpy as np
 import random
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import math
 from PIL import Image
 from verl import DataProto
@@ -142,13 +142,62 @@ def filter_group_data(batch_list : List[Dict],
                         tool_callings: np.ndarray,
                         config,
                         last_try: bool = False,
+                        needed: Optional[int] = None,
                         ):
     """
     Dynamic Sampling:
     Over-sample and filter out episode group in which all episodes have the same rewards.
     Adopted from DAPO (https://arxiv.org/abs/2503.14476)
     """
+    # On the last attempt:
+    # 1) Prefer keeping all groups whose rewards are not identical within the group;
+    # 2) If samples are still insufficient (needed), fill from groups whose rewards are identical, in order, until reaching needed or exhausting this batch.
     if last_try:
+        batch_size = config.data.train_batch_size
+        group_n = config.env.rollout.n
+        if group_n <= 1:
+            print("Warning: group_n <= 1, last_try logic same as regular; no dynamic sampling fill needed")
+
+        # Compute indices per group and whether the group is non-uniform (rewards not all equal within group)
+        nonuniform_groups = []  # Store sample-level index arrays per group
+        uniform_groups = []
+        for i in range(batch_size):
+            group_indices = np.arange(i * group_n, (i + 1) * group_n)
+            group_rewards = episode_rewards[group_indices]
+            # check if all group__uid are the same
+            for index in group_indices:
+                assert batch_list[index][0]['uid'] == batch_list[group_indices[0]][0]['uid']
+            if not np.all(group_rewards == group_rewards[0]):
+                nonuniform_groups.append(group_indices)
+            else:
+                uniform_groups.append(group_indices)
+        # Target number of groups to take (group as atomic unit), floor-divide for alignment
+        groups_to_take = needed // group_n
+
+        # First take all non-uniform groups; if insufficient, fill with uniform groups (sequentially for stability)
+        selected_groups = []
+        if len(nonuniform_groups) >= groups_to_take:
+            selected_groups = nonuniform_groups[:groups_to_take]
+        else:
+            selected_groups = nonuniform_groups[:]
+            remaining = groups_to_take - len(selected_groups)
+            if remaining > 0:
+                selected_groups.extend(uniform_groups[:remaining])
+
+        keep_indices = np.concatenate(selected_groups)
+
+        # Filter all outputs based on keep_indices
+        success = {
+            key: value[keep_indices]
+            for key, value in success.items()
+            if len(value) == len(batch_list)
+        }
+        batch_list = [batch_list[i] for i in keep_indices]
+        episode_rewards = episode_rewards[keep_indices]
+        episode_lengths = episode_lengths[keep_indices]
+        traj_uid = traj_uid[keep_indices]
+        tool_callings = tool_callings[keep_indices]
+
         return batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings
     
     batch_size = config.data.train_batch_size
@@ -156,14 +205,14 @@ def filter_group_data(batch_list : List[Dict],
     if group_n <= 1:
         print("Warning: group_n <= 1, no need to adopt dynamic sampling")
 
-    # Handle each group
+    # Regular attempt: keep only the groups whose rewards are not identical within the group
     keep_indices = np.array([], dtype=np.int64)
     for i in range(batch_size):
         # Get the indices of the current group
         group_indices = np.arange(i * group_n, (i + 1) * group_n)
         group_rewards = episode_rewards[group_indices]
 
-        # check if all group_traj_uid are the same
+        # check if all group_uid are the same
         for index in group_indices:
             assert batch_list[index][0]['uid'] == batch_list[group_indices[0]][0]['uid']
 

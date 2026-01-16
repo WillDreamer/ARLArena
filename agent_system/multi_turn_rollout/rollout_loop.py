@@ -492,22 +492,69 @@ class TrajectoryCollector:
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
             )
-            batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = filter_group_data(batch_list=batch_list, 
-                                                                                                episode_rewards=episode_rewards, 
-                                                                                                episode_lengths=episode_lengths, 
-                                                                                                success=success, 
-                                                                                                traj_uid=traj_uid, 
-                                                                                                tool_callings=tool_callings, 
+            # On the last attempt, compute how many samples are needed to fill the deficit
+            needed = None
+            if try_count == max_try_count:
+                target_total = self.config.data.train_batch_size * self.config.env.rollout.n
+                current_total = len(total_batch_list)
+                deficit = max(0, target_total - current_total)
+                needed = deficit if deficit > 0 else 0
+
+            batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = filter_group_data(
+                                                                                                batch_list=batch_list,
+                                                                                                episode_rewards=episode_rewards,
+                                                                                                episode_lengths=episode_lengths,
+                                                                                                success=success,
+                                                                                                traj_uid=traj_uid,
+                                                                                                tool_callings=tool_callings,
                                                                                                 config=self.config,
                                                                                                 last_try=(try_count == max_try_count),
+                                                                                                needed=needed,
                                                                                                 )
             
-            total_batch_list += batch_list
-            total_episode_rewards.append(episode_rewards)
-            total_episode_lengths.append(episode_lengths)
-            total_success.append(success)
-            total_traj_uid.append(traj_uid)
-            total_tool_callings.append(tool_callings)
+            # Truncate to target size if accumulated samples would exceed the target
+            target_total = self.config.data.train_batch_size * self.config.env.rollout.n
+            current_total = len(total_batch_list)
+            remaining_needed = target_total - current_total
+            
+            if len(batch_list) > remaining_needed:
+                # Truncate by group to ensure alignment
+                group_n = self.config.env.rollout.n
+                groups_to_take = remaining_needed // group_n
+                samples_to_take = groups_to_take * group_n
+                
+                if samples_to_take > 0:
+                    original_length = len(batch_list)
+                    batch_list = batch_list[:samples_to_take]
+                    episode_rewards = episode_rewards[:samples_to_take]
+                    episode_lengths = episode_lengths[:samples_to_take]
+                    # Filter success dict: only truncate entries that have the same length as original batch
+                    success = {
+                        key: value[:samples_to_take] if len(value) == original_length else value
+                        for key, value in success.items()
+                    }
+                    traj_uid = traj_uid[:samples_to_take]
+                    tool_callings = tool_callings[:samples_to_take]
+                else:
+                    # No room for more complete groups, skip this batch
+                    batch_list = []
+                    episode_rewards = np.array([])
+                    episode_lengths = np.array([])
+                    success = {key: np.array([]) for key in success.keys()}
+                    traj_uid = np.array([])
+                    tool_callings = np.array([])
+            
+            if len(batch_list) > 0:
+                total_batch_list += batch_list
+                total_episode_rewards.append(episode_rewards)
+                total_episode_lengths.append(episode_lengths)
+                total_success.append(success)
+                total_traj_uid.append(traj_uid)
+                total_tool_callings.append(tool_callings)
+                if try_count == max_try_count:
+                    print(f"Reached max try count. Collected {len(total_batch_list)} samples.")
+                else:
+                    print(f"After filtering, got {len(batch_list)} valid samples, total valid num={len(total_batch_list)}")
 
         total_episode_rewards = np.concatenate(total_episode_rewards, axis=0)
         total_episode_lengths = np.concatenate(total_episode_lengths, axis=0)
