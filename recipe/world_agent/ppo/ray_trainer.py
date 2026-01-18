@@ -1120,4 +1120,8 @@ class WorldAgentTrainer(RayPPOTrainer):
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
+                    # Explicitly finish logging to ensure all metrics are uploaded
+                    for backend_name, logger_instance in logger.logger.items():
+                        if hasattr(logger_instance, 'finish'):
+                            logger_instance.finish()
                     return

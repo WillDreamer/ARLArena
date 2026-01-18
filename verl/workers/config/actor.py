@@ -107,6 +107,8 @@ class ActorConfig(BaseConfig):
     use_seq_mask: bool = False  # Whether to use seq mask (proposed by Deepseek-V3.2)
     seq_mask_delta: float = 0.223
     entropy_coeff: float = 0
+    tau_pos: float = 1.0
+    tau_neg: float = 1.05
     tis_imp_ratio_cap: float = -1
     use_kl_loss: bool = False
     use_torch_compile: bool = True

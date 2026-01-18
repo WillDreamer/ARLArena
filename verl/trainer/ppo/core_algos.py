@@ -1487,8 +1487,8 @@ def compute_policy_loss_sapo(
     clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_ratio
 
     # --- SAPO hyperparameters: τ_neg > τ_pos for faster decay on negative sequences (Sec. 3) ---
-    tau_pos = getattr(config, "sapo_tau_pos", 1.0)
-    tau_neg = getattr(config, "sapo_tau_neg", 1.05)
+    tau_pos = getattr(config, "tau_pos", 1.0)
+    tau_neg = getattr(config, "tau_neg", 1.05)
 
     # --- Token-level importance ratios r_i,t(θ) (Eq. (2)) ---
     negative_approx_kl = log_prob - old_log_prob          # log r_i,t
