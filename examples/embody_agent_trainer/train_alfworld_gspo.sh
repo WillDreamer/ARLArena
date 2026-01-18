@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -52,9 +52,9 @@ python3 -m examples.data_preprocess.prepare \
     --val_data_size $val_data_size
 
 # for seed in 0 42 33
-for seed in 42
+for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_smallest_bound"
     # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
@@ -78,6 +78,8 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+        actor_rollout_ref.actor.clip_ratio_low=3e-4 \
+        actor_rollout_ref.actor.clip_ratio_high=4e-4 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
