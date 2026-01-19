@@ -19,6 +19,7 @@ import os
 
 import hydra
 import ray
+import wandb
 
 from recipe.game_agent.ppo.ray_trainer import GameAgentTrainer
 
@@ -41,6 +42,7 @@ def run_ppo(config) -> None:
 
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))
+    wandb.finish()
 
 
 @ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
