@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import random
 from typing import List
 import re
 
@@ -31,6 +29,11 @@ def sokoban_projection(actions: List[str]):
     - 2: Down
     - 3: Left
     - 4: Right
+    
+    Returns:
+        actions: List of processed action values (0-4)
+        valids: List of validity flags (0 or 1)
+        format_valids: List of format validity flags (0 or 1)
     """
 
     action_pools = {
@@ -72,25 +75,33 @@ def sokoban_projection(actions: List[str]):
             # perfectly formatted
             extracted_action = m.group(2).strip().lower()
             format_valids[i] = 1
+            # Find matching action in action_pools
+            found = False
             for act in action_pools.keys():
                 if act in extracted_action:
                     actions[i] = action_pools[act]
                     valids[i] = 1
-                else:
-                    actions[i] = default_invalid_store
-                    valids[i] = 0
+                    found = True
+                    break
+            if not found:
+                actions[i] = default_invalid_store
+                valids[i] = 0
             continue
 
         m2 = action_first_re.search(original_str)
         if m2:
             extracted_action = m2.group(1).strip().lower()
             format_valids[i] = 0  # penalty: format not strictly valid
-            valids[i] = 0        # penalty: considered invalid even if extracted
+            valids[i] = 0         # penalty: considered invalid even if extracted
+            # Find matching action in action_pools
+            found = False
             for act in action_pools.keys():
                 if act in extracted_action:
                     actions[i] = action_pools[act]
-                else:
-                    actions[i] = default_invalid_store
+                    found = True
+                    break
+            if not found:
+                actions[i] = default_invalid_store
             continue
 
         actions[i] = default_invalid_store

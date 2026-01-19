@@ -5,10 +5,7 @@ ENGINE=${1:-vllm}
 GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
-# EXTRA: clean ray trainer first
-ray stop --force
-
-export RAY_TMPDIR="/data2/dannie/ray_$(date +%s)"
+export RAY_TMPDIR="/local/dannie/ray_$(date +%s)"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -37,7 +34,7 @@ MODEL=${SFT_MODEL}  # 使用合并后的模型
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_rft"
-estimator="empg"
+estimator="gspo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -128,5 +125,7 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.total_epochs=200 \
     trainer.val_before_train=False \
     trainer.max_actor_ckpt_to_keep=3 \
+    actor_rollout_ref.actor.clip_ratio_low=3e-3 \
+    actor_rollout_ref.actor.clip_ratio_high=4e-3 \
     trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
     critic.model.path=$Critic_MODEL $@
