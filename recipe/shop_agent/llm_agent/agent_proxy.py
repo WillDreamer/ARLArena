@@ -76,11 +76,11 @@ class ApiCallingWrapperWg:
         # model_info adjust
         model_info = config.model_info[config.model_config.model_name]
         self.llm_kwargs = model_info.generation_kwargs
-        
+
         # concurrent LLM需要改
         self.llm = ConcurrentLLM(
-			provider=model_info.provider_name,
-            model_name=model_info.model_name,
+			provider="gemini", # model_info.provider_name,
+            model_name="gemini-2.5-pro", # model_info.model_name,
             max_concurrency=config.model_config.max_concurrency
         )
         
@@ -98,6 +98,7 @@ class ApiCallingWrapperWg:
         """
 
         messages_list = lm_inputs.non_tensor_batch.get('messages_list', None)
+        
         if messages_list is not None:
             messages_list = messages_list.tolist()
         else:
@@ -137,6 +138,236 @@ class ApiCallingWrapperWg:
         lm_outputs.meta_info = lm_inputs.meta_info
         
         return lm_outputs
+    
+
+class ApiCallingWrapperWg_Memory:
+    """Wrapper class for API-based LLM calls that fits into the VERL framework"""
+    
+    def __init__(self, config, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        # model_info adjust
+        model_info = config.model_info[config.model_config.model_name]
+        self.llm_kwargs = model_info.generation_kwargs
+
+        # concurrent LLM需要改
+        self.llm = ConcurrentLLM(
+			provider="gemini", # model_info.provider_name,
+            model_name="gemini-2.5-pro", # model_info.model_name,
+            max_concurrency=config.model_config.max_concurrency
+        )
+        
+        print(f'API-based LLM ({model_info.provider_name} - {model_info.model_name}) initialized')
+
+        import time
+        time.sleep(10)
+        # exit()
+
+    def _get_messages_list(self, lm_inputs):
+        messages_list = lm_inputs.non_tensor_batch.get('messages_list', None)
+        
+        if messages_list is not None:
+            messages_list = messages_list.tolist()
+        else:
+            input_ids = lm_inputs.batch.get('input_ids', None)
+            if input_ids is None:
+                raise KeyError("messages_list missing and input_ids unavailable")
+            if hasattr(input_ids, "detach"):
+                input_ids = input_ids.detach().cpu()
+            
+            fallback_messages = []
+            for ids in input_ids:
+                text = self.tokenizer.decode(ids.tolist(), skip_special_tokens=True)
+                fallback_messages.append([{"role": "user", "content": text}])
+            messages_list = fallback_messages
+            print("[WARN] Constructed fallback prompts from input_ids")
+
+        return messages_list
+
+    def _pack_output(self, inputs, final_texts):
+        lm_outputs = DataProto()
+        batch_len = len(final_texts)
+        env_ids = inputs.non_tensor_batch.get('env_ids', np.arange(batch_len, dtype=object))
+        group_ids = inputs.non_tensor_batch.get('group_ids', np.zeros(batch_len, dtype=object))
+        
+        lm_outputs.non_tensor_batch = {
+            'response_texts': final_texts,
+            'env_ids': env_ids,
+            'group_ids': group_ids
+        }
+        lm_outputs.meta_info = inputs.meta_info
+        return lm_outputs
+    
+    
+    def _check_has_history(self, messages_list):
+        has_history_mask = []
+        history_marker = "Below are the most recent"
+
+        for history in messages_list:
+            last_message_content = history[-1]['content']
+            
+            if history_marker in last_message_content:
+                has_history_mask.append(True)
+            else:
+                has_history_mask.append(False)
+                
+        return has_history_mask
+
+    def _extract_history_blocks(self, messages_list, has_history_mask):
+        history_blocks = []
+        pattern = r"(Below are the most recent .*? observations and the corresponding actions you took: .*?)(?=\nYou are now at step)"
+
+        for i, history in enumerate(messages_list):
+            if has_history_mask[i]:
+                last_msg_content = history[-1]['content']
+                
+                match = re.search(pattern, last_msg_content, re.DOTALL)
+                
+                if match:
+                    history_blocks.append(match.group(1))
+                else:
+                    print(f"[WARN] History marker found but extraction failed for item {i}")
+                    history_blocks.append(None)
+            else:
+                history_blocks.append(None)
+                
+        return history_blocks
+    
+    def _extract_background_info(self, messages_list):
+        background_infos = []
+    
+        pattern = (
+            r"(You are an expert autonomous agent operating in the WebShop e‑commerce environment\.\n"
+            r"Your task is to: .*?)"
+            r"(?=\nPrior to this step|\nYour current observation is)"
+        )
+
+        for history in messages_list:
+            last_msg_content = history[-1]['content']
+            
+            match = re.search(pattern, last_msg_content, re.DOTALL)
+            
+            if match:
+                background_infos.append(match.group(1))
+            else:
+                print("[WARN] Background info not found.")
+                background_infos.append(None)
+                
+        return background_infos
+    
+    def _prepare_summary_prompts(self, background_infos, history_blocks, has_history_mask):
+        summary_messages_list = []
+        active_indices = []
+
+        for i, has_history in enumerate(has_history_mask):
+            if has_history:
+                bg_info = background_infos[i]
+                hist_block = history_blocks[i]
+                
+                prompt_text = (
+                    f"=== TASK CONTEXT (READ ONLY) ===\n"
+                    f"{bg_info}\n\n"
+                    f"The following is the raw log of your recent interactions:\n"
+                    f"---------------------\n"
+                    f"{hist_block}\n"
+                    f"---------------------\n"
+                    f"Please summarize the past interaction history above concisely using words, "
+                    f"highlighting the key information that will be helpful for the next step decision making."
+                )
+                
+                summary_messages_list.append([{"role": "user", "content": prompt_text}])
+                active_indices.append(i)
+
+        return summary_messages_list, active_indices
+    
+    def _run_summarization(self, summary_messages_list):
+        if not summary_messages_list:
+            return []
+        
+        results, failed_messages = self.llm.run_batch(
+            messages_list=summary_messages_list, 
+            **self.llm_kwargs
+        )
+    
+        assert not failed_messages, "Summarization agent failed on some messages"
+
+        summaries = [res["response"] for res in results]
+        
+        return summaries
+    
+    def _inject_summaries(self, messages_list, history_blocks, summaries, active_indices):
+        final_message_lists = []
+        summary_cursor = 0
+
+        summary_label = "Summarization of Previous Observation and Past Actions: "
+
+        for i, history in enumerate(messages_list):
+            new_history = [dict(msg) for msg in history]
+            
+            last_message = new_history[-1]
+            original_content = last_message['content']
+            
+            if i in active_indices:
+                target_text = history_blocks[i]
+
+                generated_summary = summaries[summary_cursor]
+                formatted_summary = f"{summary_label}{generated_summary}"
+
+                new_content = original_content.replace(target_text, formatted_summary)
+                
+                last_message['content'] = new_content
+                summary_cursor += 1
+            
+            final_message_lists.append(new_history)
+                
+        return final_message_lists
+    
+
+    def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
+        messages_list = self._get_messages_list(lm_inputs)
+        batch_size = len(messages_list)
+
+        target_phrase = "You are Qwen, created by Alibaba Cloud."
+        for history in messages_list:
+            for msg in history:
+                if target_phrase in msg.get("content", ""):
+                    msg["content"] = msg["content"].replace(target_phrase, "")
+
+        has_history_mask = self._check_has_history(messages_list)
+        # print(f"has_history_mask: {has_history_mask}")
+
+        if all(has_history_mask):
+            history_blocks = self._extract_history_blocks(messages_list, has_history_mask)
+            # print(f"history_blocks: {history_blocks[0]}")
+            background_infos = self._extract_background_info(messages_list)
+            # print(f"background_infos: {background_infos[0]}")
+            summary_messages_list, active_indices = self._prepare_summary_prompts(background_infos, history_blocks, has_history_mask)
+            # print(f"summary_messages_list: {summary_messages_list[0]}")
+            # print(f"active_indices: {active_indices}")
+            summaries = self._run_summarization(summary_messages_list)
+            # print(f"summaries: {summaries[0]}")
+            # _ = input("Next: ")
+
+            final_prompts = self._inject_summaries(messages_list, history_blocks, summaries, active_indices)
+            # print(f"final_prompts: {final_prompts[0]}")
+            # _ = input("Next: ")
+
+        else:
+            final_prompts = messages_list
+        
+        results, failed_messages = self.llm.run_batch(
+            messages_list=final_prompts,
+            **self.llm_kwargs
+        )
+        assert not failed_messages, f"Failed to generate responses for the following messages: {failed_messages}"
+
+        final_texts = [res["response"] for res in results]
+        # print(f"final_texts: {final_texts[0]}")
+        # _ = input("Next: ")
+        
+        return self._pack_output(lm_inputs, final_texts)
+    
+
 
 class ApiCallingWrapperWg_MAS:
     """Multi-Agent Wrapper."""
@@ -151,15 +382,21 @@ class ApiCallingWrapperWg_MAS:
         self.max_iterations = 5
         self.num_agents = 3
         self.agents = []
-        
-        for i in range(self.num_agents):
+
+        agent_configs = [
+            {"provider": "gemini", "model": "gemini-2.5-pro"},
+            {"provider": "openai", "model": "o3"},
+            {"provider": "openai", "model": "gpt-5.2"},
+        ]
+
+        for i, config_item in enumerate(agent_configs):
             agent = ConcurrentLLM(
-                provider=model_info.provider_name,
-                model_name=model_info.model_name,
+                provider=config_item["provider"],
+                model_name=config_item["model"],
                 max_concurrency=config.model_config.max_concurrency
             )
             self.agents.append(agent)
-            print(f'Multi-Agent Setup: Agent {i} ({model_info.model_name}) initialized')
+            print(f'Multi-Agent Setup: Agent {i} ({config_item["provider"]}/{config_item["model"]}) initialized')
 
         import time
         time.sleep(10)
@@ -198,7 +435,7 @@ class ApiCallingWrapperWg_MAS:
         
         return agent_outputs
     
-    def _prepare_debate_prompts(self, base_messages, current_candidates):
+    def _prepare_debate_prompts(self, base_messages, current_candidates, previous_outputs=None):
         inputs_per_agent = {i: [] for i in range(self.num_agents)}
         batch_size = len(base_messages)
 
@@ -211,8 +448,17 @@ class ApiCallingWrapperWg_MAS:
                 snippet = text.replace("<think>", "").replace("</think>", "").strip()
                 candidates_str += f"=== CANDIDATE SOLUTION {idx} ===\n{snippet}\n\n"
 
+            
+            transcript_str = ""
+            if previous_outputs:
+                transcript_str = ""
+                for i in range(self.num_agents):
+                    prev_text = previous_outputs[i][b].strip()
+                    transcript_str += f"=== PREVIOUS ROUND OUTPUTS Agent {i} ===\n{prev_text}\n\n"
+
             for i in range(self.num_agents):
                 instruction = (
+                    # "===============\n"
                     f"Review the candidate solutions above for the user's request.\n"
                     f"You are Agent {i}. Your previous answer is represented by CANDIDATE SOLUTION {i}.\n\n"
                     "Your Goal: Reach consensus on the BEST correct action.\n"
@@ -234,7 +480,7 @@ class ApiCallingWrapperWg_MAS:
 
                 if "assistant" in base_content[-20:]:
                     base_content = base_content.rsplit("assistant", 1)[0].strip()
-                combined_content = f"=== TASK CONTEXT (READ ONLY) ===\n{base_content}\n\n{candidates_str}\n{instruction}\n\nassistant"
+                combined_content = f"=== TASK CONTEXT (READ ONLY) ===\n{base_content}\n\n{candidates_str}{transcript_str}{instruction}\n\nassistant"
 
 
                 last_msg['content'] = combined_content
@@ -288,9 +534,36 @@ class ApiCallingWrapperWg_MAS:
         print(f"Agent 2 Output:\n{raw_response[2]}")
         print("-" * 50)
 
+    def _check_textual_consensus(self, candidates):
+        """Checks if any two candidates have identical normalized actions."""
+        normalized = []
+        
+        for text in candidates:
+            try:
+                match = re.search(r"<action>(.*?)</action>", text, re.DOTALL | re.IGNORECASE)
+            except:
+                print(candidates)
+            if match:
+                clean = re.sub(r'[\s\W_]+', '', match.group(1).lower())
+                normalized.append(clean)
+            else:
+                normalized.append(None)
+
+
+        if normalized[0] and normalized[0] == normalized[1]:
+            return True, candidates[0]
+        if normalized[0] and normalized[0] == normalized[2]:
+            return True, candidates[0]
+        if normalized[1] and normalized[1] == normalized[2]:
+            return True, candidates[1]
+            
+        return False, None
+
     def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
         messages_list = self._get_messages_list(lm_inputs)
         batch_size = len(messages_list)
+
+
         
         # current_candidates[batch_idx] = [text_agent_0, text_agent_1, text_agent_2]
         current_candidates = [["" for _ in range(self.num_agents)] for _ in range(batch_size)]
@@ -322,6 +595,7 @@ class ApiCallingWrapperWg_MAS:
         init_prompts = {i: messages_list for i in range(self.num_agents)}
         
         results = self._run_all_agents(init_prompts)
+
         for b in range(batch_size):
             interaction_history[b]["round_0_initial"] = {
                 "input": messages_list[b],
@@ -332,17 +606,28 @@ class ApiCallingWrapperWg_MAS:
 
             current_candidates[b] = [results[i][b] for i in range(self.num_agents)]
 
+            has_consensus, consensus_text = self._check_textual_consensus(current_candidates[b])
+            if has_consensus:
+                is_solved[b] = True
+                final_solutions[b] = consensus_text
+                # Sync candidates so future loops (if entered) see the consensus
+                current_candidates[b] = [consensus_text] * self.num_agents
+
         # self._print_debug("First", is_solved[0], [results[i][0] for i in range(self.num_agents)])
 
         # print(f"current_candidates[0]: {current_candidates[0]}")
         # _ = input("Next: ")
 
+        last_round_responses = results
+
         for iteration in range(1, self.max_iterations + 1):
             # print(f"\n=== Round {iteration}: Vote or Refine ===")
 
-            prompts_map = self._prepare_debate_prompts(messages_list, current_candidates)
+            prompts_map = self._prepare_debate_prompts(messages_list, current_candidates, last_round_responses)
 
             raw_responses = self._run_all_agents(prompts_map)
+
+            last_round_responses = raw_responses
 
             next_candidates = []
 
@@ -405,14 +690,24 @@ class ApiCallingWrapperWg_MAS:
                         
                         if d_type == "vote":
                             # Agent adopted another solution
-                            target_idx = d_val if 0 <= d_val < self.num_agents else i
-                            new_row.append(candidates_b[target_idx])
+                            # target_idx = d_val if 0 <= d_val < self.num_agents else i
+                            # new_row.append(candidates_b[target_idx])
+
+                            new_row.append(candidates_b[i])
                         else:
                             # Agent refined or stood ground
                             new_row.append(d_val)
                     next_candidates.append(new_row)
 
             current_candidates = next_candidates
+
+            for b in range(batch_size):
+                if not is_solved[b]:
+                    has_consensus, consensus_text = self._check_textual_consensus(current_candidates[b])
+                    if has_consensus:
+                        is_solved[b] = True
+                        final_solutions[b] = consensus_text
+                        current_candidates[b] = [consensus_text] * self.num_agents
             
             # Check for global convergence
             if all(is_solved):
@@ -462,8 +757,8 @@ class ApiCallingWrapperWg_Mixture:
 
         for i in range(self.num_agents):
             agent = ConcurrentLLM(
-                provider=model_info.provider_name,
-                model_name=model_info.model_name,
+                provider="openai", # model_info.provider_name,
+                model_name="gpt-4o", # model_info.model_name,
                 max_concurrency=config.model_config.max_concurrency
             )
             self.agents.append(agent)
@@ -529,13 +824,14 @@ class ApiCallingWrapperWg_Mixture:
 
             
             orchestrator_instruction = (
-                "You are the Lead Orchestrator. You are NOT the agent acting in the environment.\n"
-                "Your goal is to JUDGE the candidate solutions provided below.\n\n"
                 f"{candidates_str}"
                 "=== ORCHESTRATOR INSTRUCTIONS ===\n"
+                "You are the Lead Orchestrator. You are NOT the agent acting in the environment.\n"
+                "Your goal is to SELECT the single best solution from the candidates provided above.\n\n"
                 "1. Read the 'Task Context' to understand the goal.\n"
                 "2. Critically evaluate EACH agent's proposal. explicitly mentioning 'Agent 0', 'Agent 1', etc.\n"
-                "3. Synthesize an optimal solution by integrating the key strengths of each agent's proposal.\n\n"
+                "3. Select the ONE agent that offers the optimal solution.\n"
+                "4. You are STRICTLY FORBIDDEN from creating a new solution, merging proposals, or modifying the chosen agent's output. You must pick exactly one existing candidate.\n\n"
                 "REQUIRED OUTPUT FORMAT:\n"
                 "<think>\n"
                 "Critique of Agent 0: ...\n"
@@ -656,7 +952,7 @@ class ApiCallingWrapperWg_Mixture:
         return self._pack_output(lm_inputs, final_texts), interaction_history
     
 
-class ApiCallingWrapperWg_Sequential:    
+class ApiCallingWrapperWg_Sequential_v1:    
     def __init__(self, config, tokenizer):
         self.config = config
         self.tokenizer = tokenizer
@@ -837,5 +1133,445 @@ class ApiCallingWrapperWg_Sequential:
                     "output": current_responses[b]
                 }
                 interaction_history[b]["sequence_steps"].append(step_record)
+        
+        return self._pack_output(lm_inputs, current_responses), interaction_history
+
+
+
+
+class ApiCallingWrapperWg_Sequential_v2:    
+    def __init__(self, config, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        
+        model_info = config.model_info[config.model_config.model_name]
+        self.llm_kwargs = model_info.generation_kwargs
+
+        self.num_agents = 3
+        self.agents = []
+        
+
+        for i in range(self.num_agents):
+            agent = ConcurrentLLM(
+                provider="openai",
+                model_name="gpt-4o",
+                max_concurrency=config.model_config.max_concurrency
+            )
+            self.agents.append(agent)
+            print(f'Multi-Agent Setup: Agent {i} ({model_info.model_name}) initialized')
+
+        import time
+        time.sleep(10)
+
+    def _get_messages_list(self, lm_inputs):
+        messages_list = lm_inputs.non_tensor_batch.get('messages_list', None)
+        
+        if messages_list is not None:
+            messages_list = messages_list.tolist()
+        else:
+            input_ids = lm_inputs.batch.get('input_ids', None)
+            if input_ids is None:
+                raise KeyError("messages_list missing and input_ids unavailable")
+            if hasattr(input_ids, "detach"):
+                input_ids = input_ids.detach().cpu()
+            
+            fallback_messages = []
+            for ids in input_ids:
+                text = self.tokenizer.decode(ids.tolist(), skip_special_tokens=True)
+                fallback_messages.append([{"role": "user", "content": text}])
+            messages_list = fallback_messages
+            print("[WARN] Constructed fallback prompts from input_ids")
+
+        return messages_list
+    
+    def _prepare_verification_prompts(self, base_messages, agent0_responses):
+        prompts = []
+        batch_size = len(base_messages)
+
+        for b in range(batch_size):
+            original_hist = base_messages[b]
+            proposal = agent0_responses[b]
+            
+            last_msg_dict = original_hist[-1]
+            base_content = last_msg_dict['content']
+
+            if "assistant" in base_content[-20:]:
+                base_content = base_content.rsplit("assistant", 1)[0].strip()
+            if base_content.startswith("system") and "user\n" in base_content:
+                base_content = base_content.split("user\n", 1)[1].strip()
+
+            verification_instruction = (
+                "=== INITIAL PROPOSAL (Agent 0) ===\n"
+                f"{proposal}\n"
+                "==================================\n\n"
+                f"You are a Verifier Agent. You are NOT acting in the environment.\n"
+                f"Your goal is to EVALUATE the Initial Proposal below. Identify logical errors, missing steps, or potential risks.\n\n"
+                "=== INSTRUCTIONS ===\n"
+                "1. Read the 'Task Context' to understand the goal.\n"
+                "2. Critique the 'Initial Proposal' for correctness.\n"
+                "3. Output a purely evaluative message detailing pros and cons.\n"
+                "4. DO NOT generate the final action yet, just the evaluation.\n"
+            )
+            
+            combined_content = (
+                f"=== TASK CONTEXT (READ ONLY) ===\n"
+                f"{base_content}\n"
+                f"================================\n\n"
+                f"{verification_instruction}\n\n"
+                f"assistant"
+            )
+
+            new_hist = [dict(msg) for msg in original_hist]
+            new_hist[-1]['content'] = combined_content
+            prompts.append(new_hist)
+
+        return prompts
+
+    def _prepare_final_refinement_prompts(self, base_messages, agent0_responses, agent1_responses):
+        prompts = []
+        batch_size = len(base_messages)
+
+        for b in range(batch_size):
+            original_hist = base_messages[b]
+            proposal = agent0_responses[b]
+            evaluation = agent1_responses[b]
+            
+            # Extract clean task description
+            last_msg_dict = original_hist[-1]
+            base_content = last_msg_dict['content']
+
+            if "assistant" in base_content[-20:]:
+                base_content = base_content.rsplit("assistant", 1)[0].strip()
+            if base_content.startswith("system") and "user\n" in base_content:
+                base_content = base_content.split("user\n", 1)[1].strip()
+
+            refinement_instruction = (
+                "=== INITIAL PROPOSAL (Agent 0) ===\n"
+                f"{proposal}\n"
+                "==================================\n\n"
+                "=== EVALUATION (Agent 1) ===\n"
+                f"{evaluation}\n"
+                "============================\n\n"
+                f"You are the Final Refiner Agent.\n"
+                f"Your goal is to produce the final correct action based on the Proposal and the Evaluation provided below.\n\n"
+                "=== INSTRUCTIONS ===\n"
+                "1. Synthesize the original goal, the proposal, and the evaluation.\n"
+                "2. Explain your reasoning for the final fix in <think> tags.\n"
+                "3. Output the final solution wrapped in <action> tags.\n"
+            )
+            
+            combined_content = (
+                f"=== TASK CONTEXT (READ ONLY) ===\n"
+                f"{base_content}\n"
+                f"================================\n\n"
+                f"{refinement_instruction}\n\n"
+                f"assistant"
+            )
+
+            new_hist = [dict(msg) for msg in original_hist]
+            new_hist[-1]['content'] = combined_content
+            prompts.append(new_hist)
+
+        return prompts
+    
+    def _pack_output(self, inputs, final_texts):
+        lm_outputs = DataProto()
+        batch_len = len(final_texts)
+        env_ids = inputs.non_tensor_batch.get('env_ids', np.arange(batch_len, dtype=object))
+        group_ids = inputs.non_tensor_batch.get('group_ids', np.zeros(batch_len, dtype=object))
+        
+        lm_outputs.non_tensor_batch = {
+            'response_texts': final_texts,
+            'env_ids': env_ids,
+            'group_ids': group_ids
+        }
+        lm_outputs.meta_info = inputs.meta_info
+        return lm_outputs
+
+    def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
+        messages_list = self._get_messages_list(lm_inputs)
+
+        target_phrase = "You are Qwen, created by Alibaba Cloud."
+        for history in messages_list:
+            for msg in history:
+                if target_phrase in msg.get("content", ""):
+                    msg["content"] = msg["content"].replace(target_phrase, "")
+
+        batch_size = len(messages_list)
+        interaction_history = [
+            {"batch_index": b, "sequence_steps": []} 
+            for b in range(batch_size)
+        ]
+        
+
+        agent0_output = [] 
+        agent1_output = [] 
+        current_responses = []
+
+        for i in range(self.num_agents):
+            if i == 0:
+                current_prompts = messages_list
+            elif i == 1:
+                agent0_output = current_responses
+                current_prompts = self._prepare_verification_prompts(messages_list, agent0_output)
+            elif i == 2:
+                agent1_output = current_responses
+                current_prompts = self._prepare_final_refinement_prompts(messages_list, agent0_output, agent1_output)
+
+            step_description = f"agent_{i}"
+
+            results, failed = self.agents[i].run_batch(
+                messages_list=current_prompts, 
+                **self.llm_kwargs
+            )
+            assert not failed, f"Agent {i} failed on some messages"
+            
+            current_responses = [res["response"] for res in results]
+
+            for b in range(batch_size):
+                step_record = {
+                    "agent_index": i,
+                    "step_description": step_description,
+                    "input": current_prompts[b],
+                    "output": current_responses[b]
+                }
+                interaction_history[b]["sequence_steps"].append(step_record)
+        
+        return self._pack_output(lm_inputs, current_responses), interaction_history
+    
+
+
+class ApiCallingWrapperWg_Sequential:    
+    def __init__(self, config, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        
+        model_info = config.model_info[config.model_config.model_name]
+        self.llm_kwargs = model_info.generation_kwargs
+
+        self.num_agents = 3
+        self.agents = []
+        
+
+        for i in range(self.num_agents):
+            agent = ConcurrentLLM(
+                provider="openai",
+                model_name="gpt-4o",
+                max_concurrency=config.model_config.max_concurrency
+            )
+            self.agents.append(agent)
+            print(f'Multi-Agent Setup: Agent {i} ({model_info.model_name}) initialized')
+
+
+        self.previous_step_thoughts = None
+
+        import time
+        time.sleep(10)
+
+    def _get_messages_list(self, lm_inputs):
+        messages_list = lm_inputs.non_tensor_batch.get('messages_list', None)
+        
+        if messages_list is not None:
+            messages_list = messages_list.tolist()
+        else:
+            input_ids = lm_inputs.batch.get('input_ids', None)
+            if input_ids is None:
+                raise KeyError("messages_list missing and input_ids unavailable")
+            if hasattr(input_ids, "detach"):
+                input_ids = input_ids.detach().cpu()
+            
+            fallback_messages = []
+            for ids in input_ids:
+                text = self.tokenizer.decode(ids.tolist(), skip_special_tokens=True)
+                fallback_messages.append([{"role": "user", "content": text}])
+            messages_list = fallback_messages
+            print("[WARN] Constructed fallback prompts from input_ids")
+
+        return messages_list
+    
+    def _prepare_verification_prompts(self, base_messages, agent0_responses):
+        prompts = []
+        batch_size = len(base_messages)
+
+        for b in range(batch_size):
+            original_hist = base_messages[b]
+            proposal = agent0_responses[b]
+            
+            last_msg_dict = original_hist[-1]
+            base_content = last_msg_dict['content']
+
+            if "assistant" in base_content[-20:]:
+                base_content = base_content.rsplit("assistant", 1)[0].strip()
+            if base_content.startswith("system") and "user\n" in base_content:
+                base_content = base_content.split("user\n", 1)[1].strip()
+
+            verification_instruction = (
+                "=== INITIAL PROPOSAL (Agent 0) ===\n"
+                f"{proposal}\n"
+                "==================================\n\n"
+                f"You are a Verifier Agent. You are NOT acting in the environment.\n"
+                f"Your goal is to EVALUATE the Initial Proposal below. Identify logical errors, missing steps, or potential risks.\n\n"
+                "=== INSTRUCTIONS ===\n"
+                "1. Read the 'Task Context' to understand the goal.\n"
+                "2. Critique the 'Initial Proposal' for correctness.\n"
+                "3. Output a purely evaluative message detailing pros and cons.\n"
+                "4. DO NOT generate the final action yet, just the evaluation.\n"
+            )
+            
+            combined_content = (
+                f"=== TASK CONTEXT (READ ONLY) ===\n"
+                f"{base_content}\n"
+                f"================================\n\n"
+                f"{verification_instruction}\n\n"
+                f"assistant"
+            )
+
+            new_hist = [dict(msg) for msg in original_hist]
+            new_hist[-1]['content'] = combined_content
+            prompts.append(new_hist)
+
+        return prompts
+
+    def _prepare_final_refinement_prompts(self, base_messages, agent0_responses, agent1_responses):
+        prompts = []
+        batch_size = len(base_messages)
+
+        for b in range(batch_size):
+            original_hist = base_messages[b]
+            proposal = agent0_responses[b]
+            evaluation = agent1_responses[b]
+            
+            # Extract clean task description
+            last_msg_dict = original_hist[-1]
+            base_content = last_msg_dict['content']
+
+            if "assistant" in base_content[-20:]:
+                base_content = base_content.rsplit("assistant", 1)[0].strip()
+            if base_content.startswith("system") and "user\n" in base_content:
+                base_content = base_content.split("user\n", 1)[1].strip()
+
+            refinement_instruction = (
+                "=== INITIAL PROPOSAL (Agent 0) ===\n"
+                f"{proposal}\n"
+                "==================================\n\n"
+                "=== EVALUATION (Agent 1) ===\n"
+                f"{evaluation}\n"
+                "============================\n\n"
+                f"You are the Final Refiner Agent.\n"
+                f"Your goal is to produce the final correct action based on the Proposal and the Evaluation provided below.\n\n"
+                "=== INSTRUCTIONS ===\n"
+                "1. Synthesize the original goal, the proposal, and the evaluation.\n"
+                "2. Explain your reasoning for the final fix in <think> tags.\n"
+                "3. Output the final solution wrapped in <action> tags.\n"
+            )
+            
+            combined_content = (
+                f"=== TASK CONTEXT (READ ONLY) ===\n"
+                f"{base_content}\n"
+                f"================================\n\n"
+                f"{refinement_instruction}\n\n"
+                f"assistant"
+            )
+
+            new_hist = [dict(msg) for msg in original_hist]
+            new_hist[-1]['content'] = combined_content
+            prompts.append(new_hist)
+
+        return prompts
+    
+    def _pack_output(self, inputs, final_texts):
+        lm_outputs = DataProto()
+        batch_len = len(final_texts)
+        env_ids = inputs.non_tensor_batch.get('env_ids', np.arange(batch_len, dtype=object))
+        group_ids = inputs.non_tensor_batch.get('group_ids', np.zeros(batch_len, dtype=object))
+        
+        lm_outputs.non_tensor_batch = {
+            'response_texts': final_texts,
+            'env_ids': env_ids,
+            'group_ids': group_ids
+        }
+        lm_outputs.meta_info = inputs.meta_info
+        return lm_outputs
+
+    def generate_sequences(self, lm_inputs: DataProto) -> DataProto:
+        messages_list = self._get_messages_list(lm_inputs)
+
+        target_phrase = "You are Qwen, created by Alibaba Cloud."
+        for history in messages_list:
+            for msg in history:
+                if target_phrase in msg.get("content", ""):
+                    msg["content"] = msg["content"].replace(target_phrase, "")
+        
+        
+        if self.previous_step_thoughts is not None:
+            for b_idx, history in enumerate(messages_list):
+                prev_thought = self.previous_step_thoughts[b_idx]
+                
+                if prev_thought and len(history) > 0:
+                    last_msg = history[-1]
+                    content = last_msg.get("content", "")
+
+                    pattern = r"Below are the most recent (\d+) observations and the corresponding actions you took:"
+                    
+                    if re.search(pattern, content):
+                        def replace_callback(match):
+                            num_obs = match.group(1)
+                            new_sentence = f"Below are the previous thought process, the most recent {num_obs} observations and the corresponding actions you took:"
+                            return f"{new_sentence}\n[{prev_thought}]"
+
+                        last_msg["content"] = re.sub(pattern, replace_callback, content, count=1)
+                    else:
+                        print(f"[WARN] Target phrase not found in batch {b_idx}, appending thought to end.")
+                        last_msg["content"] += f"\n\n[{prev_thought}]"
+        
+
+        batch_size = len(messages_list)
+        interaction_history = [
+            {"batch_index": b, "sequence_steps": []} 
+            for b in range(batch_size)
+        ]
+        
+
+        agent0_output = [] 
+        agent1_output = [] 
+        current_responses = []
+
+        for i in range(self.num_agents):
+            if i == 0:
+                current_prompts = messages_list
+            elif i == 1:
+                agent0_output = current_responses
+                current_prompts = self._prepare_verification_prompts(messages_list, agent0_output)
+            elif i == 2:
+                agent1_output = current_responses
+                current_prompts = self._prepare_final_refinement_prompts(messages_list, agent0_output, agent1_output)
+
+            step_description = f"agent_{i}"
+
+            results, failed = self.agents[i].run_batch(
+                messages_list=current_prompts, 
+                **self.llm_kwargs
+            )
+            assert not failed, f"Agent {i} failed on some messages"
+            
+            current_responses = [res["response"] for res in results]
+
+            for b in range(batch_size):
+                step_record = {
+                    "agent_index": i,
+                    "step_description": step_description,
+                    "input": current_prompts[b],
+                    "output": current_responses[b]
+                }
+                interaction_history[b]["sequence_steps"].append(step_record)
+
+        
+        self.previous_step_thoughts = []
+        for response in current_responses:
+            match = re.search(r"<think>(.*?)</think>", response, re.DOTALL)
+            if match:
+                self.previous_step_thoughts.append(match.group(1).strip())
+            else:
+                self.previous_step_thoughts.append(None)
         
         return self._pack_output(lm_inputs, current_responses), interaction_history
