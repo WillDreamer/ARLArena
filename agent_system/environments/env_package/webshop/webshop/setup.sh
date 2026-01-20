@@ -25,7 +25,7 @@ conda install -c conda-forge openjdk=21 maven -y
 conda install mkl -y
 
 # webshop installation, model loading
-log "安装 spacy"
+log "安装 spacy, if failed, try to install spacy from source version"
 # pip install -U "numpy==2.2.6" "scipy==1.15.3"
 python -m spacy download en_core_web_sm --direct
 python -m spacy download en_core_web_lg --direct
