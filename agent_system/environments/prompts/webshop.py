@@ -42,3 +42,12 @@ Now it's your turn to take one action for the current step.
 You should first reason step-by-step about the current situation, then think carefully which admissible action best advances the shopping goal. This reasoning process MUST be enclosed within <think> </think> tags. 
 Once you've finished your reasoning, you should choose an admissible action for current step and present it within <action> </action> tags.
 """
+
+
+'''
+CRITICAL OPERATIONAL RULES:
+1. AGGRESSIVE PURCHASING: You MUST purchase an item. Do not over-explore. It is far better to buy a partially correct item than to buy nothing at all.
+2. STEP LIMIT: You must complete the purchase within 7 steps. If you are nearing this limit, immediately select the best available option and buy it.
+3. PARTIAL REWARDS: You will receive partial rewards if the purchased item matches some attributes, options, or falls within the correct price range. You do not need a 100% perfect match to succeed.
+4. PRIORITY: Focus on securing a purchase that maximizes these partial rewards rather than wasting steps searching for perfection.
+'''
