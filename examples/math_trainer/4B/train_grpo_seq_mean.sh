@@ -9,8 +9,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-
-PATH_PREFIX=/home/ec2-user/ARLArena # fill in the path for the ARLArena project
+PATH_PREFIX=/home/ec2-user/ARLArena
 # source /data1/xw27/miniconda3/etc/profile.d/conda.sh
 cd $PATH_PREFIX
 conda activate agentrl_science
@@ -60,11 +59,11 @@ APPEND_FINAL_ANSWER_FUNC=True
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
+RESUME=True
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r4096_n5_t5_4B_sapo_bs512_mbs128_lr1e-6_os2_rs_rc_void
+RUN_NAME=math_p8192_r4096_n5_t5_4B_grpo_seq_mean_bs512_mbs128_lr1e-6_os2_rs_rc_void
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=$PATH_PREFIX/outputs_$RUN_NAME
@@ -316,13 +315,14 @@ fi
 
 PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=sapo \
+    algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
     data.val_sample_size=$VAL_SAMPLE_SIZE \
     data.max_prompt_length=$MAX_PROMPT_LENGTH \
     data.max_response_length=$MAX_RESPONSE_LENGTH \
+    actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
     actor_rollout_ref.model.path=$MODEL_NAME \
     actor_rollout_ref.actor.optim.lr=$ACTOR_LR \
     actor_rollout_ref.actor.ppo_mini_batch_size=$PPO_MINI_BATCH_SIZE \

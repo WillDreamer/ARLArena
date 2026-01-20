@@ -104,7 +104,11 @@ class ActorConfig(BaseConfig):
     policy_loss: PolicyLossConfig = field(default_factory=PolicyLossConfig)
     clip_ratio_c: float = 3.0
     loss_agg_mode: str = "token-mean"
+    use_seq_mask: bool = False  # Whether to use seq mask (proposed by Deepseek-V3.2)
+    seq_mask_delta: float = 0.223
     entropy_coeff: float = 0
+    tau_pos: float = 1.0
+    tau_neg: float = 1.05
     tis_imp_ratio_cap: float = -1
     use_kl_loss: bool = False
     use_torch_compile: bool = True

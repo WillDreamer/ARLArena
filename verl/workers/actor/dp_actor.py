@@ -478,7 +478,15 @@ class DataParallelPPOActor(BasePPOActor):
                         policy_loss_kwargs["entropy"] = entropy
                     if rollout_log_probs is not None:
                         policy_loss_kwargs["rollout_log_probs"] = rollout_log_probs
-                    pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(**policy_loss_kwargs)
+                    
+                    policy_loss_result = policy_loss_fn(**policy_loss_kwargs)
+                    
+                    # Handle different return value lengths (some loss functions return 5 values, others 4)
+                    if len(policy_loss_result) == 5:
+                        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower, num_masked_seqs = policy_loss_result
+                        micro_batch_metrics["actor/num_masked_seqs"] = num_masked_seqs
+                    else:
+                        pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_result
 
                     if entropy_coeff != 0:
                         entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)

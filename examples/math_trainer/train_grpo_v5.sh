@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(1 2)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(1 2 3 4)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -14,26 +14,26 @@ source /home/xw27/anaconda3/etc/profile.d/conda.sh
 cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
-MAX_TURNS=5
-TRAIN_BATCH_SIZE=16
+MAX_TURNS=3
+TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
-ROLLOUT_N=8
+ROLLOUT_N=5
 ROLLOUT_TEMPERATURE=1.0
 VAL_TEMPERATURE=1.0
 VAL_BEFORE_TRAIN=False
-MAX_PROMPT_LENGTH=1024
-MAX_RESPONSE_LENGTH=1024
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=6144
 MAX_OBS_LENGTH=256
-PPO_MINI_BATCH_SIZE=16
-PPO_MICRO_TOKEN=9000
+PPO_MINI_BATCH_SIZE=128
+PPO_MICRO_TOKEN=11000
 TOTAL_EPOCHS=1
 TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
 VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
 ROLLOUT_GPU_MEMORY_UTIL=0.3
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-0.6B
+MODEL_NAME=Qwen/Qwen3-1.7B
 SAVE_FREQ=10
 TEST_FREQ=5
 REMOVE_CLIP=False #mask for now
@@ -60,7 +60,7 @@ RESUME=False
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p4096_r4096_n8_0.6B_grpo_bs16_mbs16_lr1e-6_temp
+RUN_NAME=math_p4096_r6144_n5_r3_1.7B_grpo_bs512_mbs128_seq6144_lr1e-6
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
 CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME

@@ -52,7 +52,7 @@ python3 -m examples.data_preprocess.prepare \
     --val_data_size $val_data_size
 
 # for seed in 0 42 33
-for seed in 42
+for seed in 0
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_w/o_lower_bound"
     # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"

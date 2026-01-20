@@ -1194,7 +1194,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
         gts=None,
         reward_extra_infos_dict=None,
         input_ids_list=None,
-        output_ids_list=None,
+        # output_ids_list=None,
         log_probs=None,
         old_log_probs=None,
         entropy=None,
@@ -1237,8 +1237,8 @@ class RayMathAgentTrainer(RayPPOTrainer):
         analysis_data = {}
         if input_ids_list is not None:
             analysis_data["input_ids"] = to_jsonable(input_ids_list)
-        if output_ids_list is not None:
-            analysis_data["output_ids"] = to_jsonable(output_ids_list)
+        # if output_ids_list is not None:
+        #     analysis_data["output_ids"] = to_jsonable(output_ids_list)
         if log_probs is not None:
             analysis_data["log_probs"] = to_jsonable(log_probs)
         if old_log_probs is not None:
@@ -1859,17 +1859,25 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                 else:
                                     print(f"Code call counts per sample: {code_call_counts}")
 
-                            input_ids_list = batch.batch["prompts"].cpu().tolist()
-                            output_ids_list = batch.batch["responses"].cpu().tolist()
-                            log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
-                            old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
-                            entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
-                            advantages = batch.batch["advantages"]
+                            input_ids_list = actor_output.batch["input_ids"].tolist()
+                            log_probs = actor_output.batch["log_prob"]
+                            old_log_probs = actor_output.batch["old_log_prob"]
+                            entropy = actor_output.batch["entropy"]
+                            advantages = actor_output.batch["advantages"][:, 0]
+
+                            # input_ids_list = batch.batch["prompts"].cpu().tolist()
+                            # output_ids_list = batch.batch["responses"].cpu().tolist()
+                            # log_probs = actor_output.meta_info["collect_logprobs"].batch["log_prob"]
+                            # old_log_probs = actor_output.meta_info["collect_logprobs"].batch["old_log_prob"]
+                            # entropy = actor_output.meta_info["collect_logprobs"].batch["entropy"]
+                            # advantages = batch.batch["advantages"]
                             grad_norm = actor_output.meta_info["metrics"]["actor/grad_norm"]
                             sequence_reward = batch.batch["token_level_rewards"].sum(-1)
 
-                            if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
-                                ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                            # if actor_output.meta_info["collect_logprobs"].batch.get("ref_log_prob") is not None:
+                            if actor_output.batch.get("ref_log_prob") is not None:
+                                # ref_log_probs = actor_output.meta_info["collect_logprobs"].batch["ref_log_prob"]
+                                ref_log_probs = actor_output.batch["ref_log_prob"]
                             else:
                                 ref_log_probs = None
 
@@ -1879,7 +1887,7 @@ class RayMathAgentTrainer(RayPPOTrainer):
                                 scores=scores,
                                 reward_extra_infos_dict=extra_rewards_info,
                                 input_ids_list=input_ids_list,
-                                output_ids_list=output_ids_list,
+                                # output_ids_list=output_ids_list,
                                 log_probs=log_probs,
                                 old_log_probs=old_log_probs,
                                 entropy=entropy,
@@ -1954,6 +1962,9 @@ class RayMathAgentTrainer(RayPPOTrainer):
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
+                    for backend_name, logger_instance in logger.logger.items():
+                        if hasattr(logger_instance, 'finish'):
+                            logger_instance.finish()
                     return
 
                 progress_bar.update(1)

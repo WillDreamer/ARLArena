@@ -22,7 +22,7 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
-estimator="gspo"
+estimator="cispo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
@@ -32,8 +32,8 @@ project_name="alfworld"
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1115
-ray start --head --port $PORT --dashboard-port=1034
+PORT=1114
+ray start --head --port $PORT --dashboard-port=1033
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,7 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_smallest_bound"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_w/o_lower_bound_seq_mask"
     # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
@@ -78,8 +78,9 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
-        actor_rollout_ref.actor.clip_ratio_low=3e-4 \
-        actor_rollout_ref.actor.clip_ratio_high=4e-4 \
+        actor_rollout_ref.actor.clip_ratio_low=1.0 \
+        actor_rollout_ref.actor.use_seq_mask=True \
+        actor_rollout_ref.actor.seq_mask_delta=0.1 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \

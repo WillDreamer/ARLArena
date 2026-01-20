@@ -19,6 +19,15 @@ from math_verify import parse
 from math_verify.grader import sympy_expr_eq
 from sympy import Basic, MatrixBase
 
+# Pre-import sympy.simplify to trigger lazy imports (like sympy.physics.units)
+# before the timeout wrapper, preventing timeouts during import
+try:
+    from sympy import simplify
+    # Trigger the lazy import of sympy.physics.units that happens during simplify
+    import sympy.physics.units  # noqa: F401
+except ImportError:
+    pass
+
 from recipe.math_agent.utils.reward_score.qwen_math_eval_toolkit.parser import (
     extract_answer as qwen_extract_answer,
 )
@@ -64,8 +73,9 @@ def verify_without_timeout(
     strict: bool = True,
 ) -> bool:
     from math_verify.utils import timeout
+    from math_verify.errors import TimeoutException
 
-    @timeout(5)
+    @timeout(10)  # Increased from 5 to 10 seconds to handle complex expressions
     def compare_single_extraction(
         gold: Basic | MatrixBase | str, target: Basic | MatrixBase | str
     ) -> bool:
@@ -93,7 +103,11 @@ def verify_without_timeout(
     def compare_single_extraction_wrapper(g, t):
         try:
             return compare_single_extraction(g, t)
+        except TimeoutException:
+            # Timeout during comparison - return False
+            return False
         except Exception as e:
+            # Other exceptions - return False
             return False
 
     if not isinstance(gold, list):

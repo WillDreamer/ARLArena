@@ -1,7 +1,7 @@
 set -x
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(2 3 4 5)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -9,37 +9,33 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # Automatically detect the number of n_gpus_per_node
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
-
-PATH_PREFIX=/home/ec2-user/ARLArena # fill in the path for the ARLArena project
-# source /data1/xw27/miniconda3/etc/profile.d/conda.sh
+PATH_PREFIX=/home/xw27/agent/ARLArena
+source /home/xw27/anaconda3/etc/profile.d/conda.sh
 cd $PATH_PREFIX
 conda activate agentrl_science
 # ======================== Hyper-parameters ========================
-
-MAX_TURNS=5
+MAX_TURNS=3
 TRAIN_BATCH_SIZE=512
 VAL_SAMPLE_SIZE=4
 N_VAL=4
 ROLLOUT_N=5
 ROLLOUT_TEMPERATURE=1.0
-VAL_TEMPERATURE=0.6
-VAL_BEFORE_TRAIN=True
-MAX_PROMPT_LENGTH=8192
-MAX_RESPONSE_LENGTH=4096
+VAL_TEMPERATURE=1.0
+VAL_BEFORE_TRAIN=False
+MAX_PROMPT_LENGTH=4096
+MAX_RESPONSE_LENGTH=6144
 MAX_OBS_LENGTH=256
 PPO_MINI_BATCH_SIZE=128
-PPO_MICRO_TOKEN=24000
-TOTAL_EPOCHS=30
-TRAIN_DATASET=("$PATH_PREFIX/recipe/math_agent/dataset/simplelr_math_35/train_new")
-VALID_DATASET=("$PATH_PREFIX/recipe/math_agent/dataset/simplelr_math_35/aime" "$PATH_PREFIX/recipe/math_agent/dataset/simplelr_math_35/aime25")
-
-ROLLOUT_GPU_MEMORY_UTIL=0.5
+PPO_MICRO_TOKEN=11000
+TOTAL_EPOCHS=1
+TRAIN_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/train" "$PATH_PREFIX/datasets/deepscaler/train")
+VALID_DATASET=("$PATH_PREFIX/datasets/simplelr_math_35/test" "$PATH_PREFIX/datasets/deepscaler/aime" "$PATH_PREFIX/datasets/deepscaler/aime25" "$PATH_PREFIX/datasets/deepscaler/olympiad" "$PATH_PREFIX/datasets/deepscaler/math")
+ROLLOUT_GPU_MEMORY_UTIL=0.3
 ACTOR_OPTIMIZER_OFFLOAD=False
 ACTOR_PARAMETER_OFFLOAD=False
-MODEL_NAME=Qwen/Qwen3-4B-Base
-SAVE_FREQ=5
-TEST_FREQ=10
-SANDBOX_RUN_TIMEOUT=10.0
+MODEL_NAME=Qwen/Qwen3-1.7B-Base
+SAVE_FREQ=10
+TEST_FREQ=5
 REMOVE_CLIP=True #mask for now
 REMOVE_EXTRA_VOID_TURN=True
 ROLLOUT_TENSOR_MODEL_PARALLEL_SIZE=1 #2
@@ -60,17 +56,16 @@ APPEND_FINAL_ANSWER_FUNC=True
 CONFIG_NAME=math_agent_trainer
 NNODES=1
 GPUS_PER_NODE=$NUM_GPUS
-RESUME=False
+RESUME=True
 PROJECT_NAME=math_trainer
 
 LOG_PATH=outputs
-RUN_NAME=math_p8192_r4096_n5_t5_4B_sapo_bs512_mbs128_lr1e-6_os2_rs_rc_void
+RUN_NAME=math_p4096_r6144_n5_r3_1.7B-Base_grpo_bs512_mbs128_seq6144_lr1e-6_rmclip_rmvoid_os2
 LOG_FILE_PATH=$LOG_PATH/$RUN_NAME.log
 
-CHECKPOINT_PATH=$PATH_PREFIX/outputs_$RUN_NAME
-ROLLOUT_DATA_DIR=$PATH_PREFIX/rollout_data_$RUN_NAME
+CHECKPOINT_PATH=/local/xw27/ARLArena/outputs_$RUN_NAME
+ROLLOUT_DATA_DIR=/local/xw27/ARLArena/rollout_data_$RUN_NAME
 mkdir -p $CHECKPOINT_PATH
-mkdir -p $ROLLOUT_DATA_DIR
 # if resume is True, then set resume_mode to auto
 if [ "$RESUME" = "True" ]; then
   RESUME_MODE="auto"
@@ -305,18 +300,18 @@ export WANDB_PROMPT_VERSION="math_agent"
 export WANDB_PROJECT="${WANDB_PROMPT_VERSION}"
 WANDB_API_KEY="09286f9b4dcf8784b832ad623eb07a6d5541f59a" # Modify your wandb key
 # Login to WandB (if API key is provided)
-if [ "$WANDB_API_KEY" != "" ]; then
-    wandb login --relogin $WANDB_API_KEY
-    mkdir -p wandb/${project_name}/${experiment_name}
-    SAVE_PATH=wandb/${project_name}/${experiment_name}
-    export WANDB_DIR=${SAVE_PATH}
-fi
+# if [ "$WANDB_API_KEY" != "" ]; then
+#     wandb login --relogin $WANDB_API_KEY
+#     mkdir -p wandb/${project_name}/${experiment_name}
+#     SAVE_PATH=wandb/${project_name}/${experiment_name}
+#     export WANDB_DIR=${SAVE_PATH}
+# fi
 
 
 
 PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     --config-name $CONFIG_NAME \
-    algorithm.adv_estimator=sapo \
+    algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VALID_FILES \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
@@ -367,7 +362,6 @@ PYTHONUNBUFFERED=1 python -m recipe.math_agent.main_math \
     agent.tool_use=$TOOL_USE \
     agent.max_turns=$MAX_TURNS \
     agent.append_final_answer_func=$APPEND_FINAL_ANSWER_FUNC \
-    agent.sandbox_run_timeout=$SANDBOX_RUN_TIMEOUT \
     data.max_start_length=4096 \
     data.max_obs_length=$MAX_OBS_LENGTH \
     trainer.val_only=$VAL_ONLY \
