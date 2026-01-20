@@ -14,7 +14,7 @@ from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from torchdata.stateful_dataloader import StatefulDataLoader
 #from recipe.shop_agent.llm_agent.agent_proxy import VllmWrapperWg
-from recipe.shop_agent.llm_agent.agent_proxy import ApiCallingWrapperWg, ApiCallingWrapperWg_MAS, ApiCallingWrapperWg_Mixture, ApiCallingWrapperWg_Sequential
+from recipe.shop_agent.llm_agent.agent_proxy import ApiCallingWrapperWg, ApiCallingWrapperWg_MAS, ApiCallingWrapperWg_Mixture, ApiCallingWrapperWg_Sequential, ApiCallingWrapperWg_Memory
 from agent_system.multi_turn_rollout.rollout_loop_eval import TrajectoryCollector
 from agent_system.environments import make_envs
 from verl.utils import hf_processor
@@ -62,7 +62,9 @@ def main(config):
     
     tokenizer = safe_load_tokenizer(config.actor_rollout_ref.model.path)
     
-    actor_wg = ApiCallingWrapperWg_MAS(config, tokenizer)
+    # actor_wg = ApiCallingWrapperWg(config, tokenizer)
+    actor_wg = ApiCallingWrapperWg_Memory(config, tokenizer)
+    # actor_wg = ApiCallingWrapperWg_MAS(config, tokenizer)
     # actor_wg = ApiCallingWrapperWg_Mixture(config, tokenizer)
     # actor_wg = ApiCallingWrapperWg_Sequential(config, tokenizer)
     
@@ -89,11 +91,13 @@ def main(config):
     #         collate_fn=collate_fn,
     #         sampler=train_sampler)
     print("444")
+
+
     
     val_dataloader = StatefulDataLoader(
             dataset=val_dataset,
-            batch_size=8,
-            num_workers=2,
+            batch_size=64,
+            num_workers=0,
             shuffle=True,
             drop_last=False,
             collate_fn=collate_fn,
@@ -101,8 +105,23 @@ def main(config):
     
     #测试数据的load
     print(f"val_dataloader: {len(val_dataloader)}")
+
+    # if True:
+    #     data_iter = iter(val_dataloader)
+
+    #     # Skip the first batch
+    #     _ = next(data_iter) 
+
+    #     # Skip the second batch
+    #     _ = next(data_iter)
+
+    #     # Skip the third batch
+    #     _ = next(data_iter)
+
+    #     # Capture the third batch
+    #     test_data = next(data_iter)
+
     for test_data in val_dataloader:
-        
         test_batch = DataProto.from_single_dict(test_data)
 
         # repeat test batch
