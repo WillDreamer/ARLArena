@@ -28,7 +28,7 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=willamazon1/Qwen3-4B-rft-webshop
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
@@ -78,6 +78,8 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
+        actor_rollout_ref.actor.tau_pos=1.0 \
+        actor_rollout_ref.actor.tau_neg=1.05 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=True \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \

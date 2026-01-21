@@ -14,7 +14,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-export RAY_TMPDIR="/data2/whx/ray_out"
+export RAY_TMPDIR="/home/ec2-user/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -28,14 +28,14 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=willamazon1/Qwen3-4B-rft-webshop
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
 estimator="gspo" 
 project_name="ARLArena_webshop"
-max_response_length=500
+max_response_length=512
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
@@ -53,9 +53,9 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2)) # evaluate 2 × val_data_size tasks during each iteration
 
-for seed in 0 42
+for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error_kl"
+    experiment_name="${MODEL_SHORT}_${estimator}_1e-2_len_${max_response_length}_format_error_kl"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.shop_agent.main_shop_agent \
@@ -78,8 +78,9 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
-        actor_rollout_ref.actor.clip_ratio_low = 3e-3 \
-        actor_rollout_ref.actor.clip_ratio_high = 4e-3 \
+        actor_rollout_ref.actor.clip_ratio_low=3e-2 \
+        actor_rollout_ref.actor.clip_ratio_high=4e-2 \
+	    actor_rollout_ref.actor.loss_agg_mode="seq-mean-token-mean" \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=True \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
@@ -113,7 +114,7 @@ do
         trainer.nnodes=1 \
         trainer.save_freq=10 \
         trainer.test_freq=10 \
-        trainer.total_epochs=150 \
+        trainer.total_epochs=250 \
         trainer.max_actor_ckpt_to_keep=2 \
         trainer.val_before_train=False $@ | tee -a outputs/${experiment_name}.log
 done

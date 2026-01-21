@@ -64,6 +64,7 @@ pip install --no-deps -e .
 python3 -m uv pip install flash-attn==2.7.4.post1 --no-build-isolation
 pip install -r requirements.txt
 python3 -m uv pip install ray==2.45.0
+python3 -m uv pip install click==8.2.1
 
 
 echo -e "${GREEN}Installation completed successfully!${NC}"
