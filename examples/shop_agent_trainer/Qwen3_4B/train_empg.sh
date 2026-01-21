@@ -5,7 +5,7 @@ ENGINE=${1:-vllm}
 ulimit -n 1048576
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -14,7 +14,7 @@ echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS=${#GPU_LIST[@]}
 echo "Detected ${NUM_GPUS} GPUs for this run"
 
-export RAY_TMPDIR="/data2/whx/ray_out"
+export RAY_TMPDIR="/home/ec2-user/ray_out"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -28,14 +28,14 @@ val_data_size=128
 group_size=8
 mode="mean_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=Qwen/Qwen3-4B
+MODEL=willamazon1/Qwen3-4B-rft-webshop
 MODEL_SHORT="${MODEL##*/}"
 
 #* estimator: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
 estimator="empg" 
 project_name="ARLArena_webshop"
-max_response_length=500
+max_response_length=512
 
 WANDB_API_KEY="ba70fcbc92808cc7a1750dd80ac3908295e6854f" # Modify your wandb key
 # ============================ Preparation ============================
@@ -53,7 +53,7 @@ python3 -m examples.data_preprocess.prepare \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2)) # evaluate 2 × val_data_size tasks during each iteration
 
-for seed in 0 42
+for seed in 0
 do
     experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error_kl"
     mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -113,7 +113,7 @@ do
         trainer.nnodes=1 \
         trainer.save_freq=10 \
         trainer.test_freq=10 \
-        trainer.total_epochs=150 \
+        trainer.total_epochs=200 \
         trainer.max_actor_ckpt_to_keep=2 \
         trainer.val_before_train=False $@ | tee -a outputs/${experiment_name}.log
 done
