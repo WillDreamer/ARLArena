@@ -570,6 +570,7 @@ class TrajectoryCollector:
             actor_rollout_wg, 
             envs: EnvironmentManagerBase,
             is_train: bool = True,
+            current_global_step: int = 0,
             ) -> DataProto:
         """
         Select and run the appropriate rollout loop (dynamic or vanilla).
@@ -579,15 +580,22 @@ class TrajectoryCollector:
             actor_rollout_wg: Actor model workers.
             envs (EnvironmentManagerBase): Environment manager for interaction.
             is_train (bool): Whether in training mode (affects dynamic sampling).
+            current_global_step (int): Current global step, used for cold start in DAPO.
 
         Returns:
             DataProto: Final collected trajectory data with metadata.
         """
         if is_train:
             gen_batch = gen_batch.repeat(repeat_times=self.config.env.rollout.n, interleave=True)
-            
+        
+        # Used for cold start in DAPO
+        if hasattr(self.config.algorithm.filter_groups, 'cold_start_steps'):
+            cold_start_steps = self.config.algorithm.filter_groups.cold_start_steps
+        else:
+            cold_start_steps = 0
+
         # Initial observations from the environment
-        if self.config.algorithm.filter_groups.enable and is_train:
+        if self.config.algorithm.filter_groups.enable and is_train and current_global_step > cold_start_steps:
             # Dynamic Sampling (for DAPO and Dynamic GiGPO)
             total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings, metrics_dict = \
                 self.dynamic_multi_turn_loop(

@@ -872,6 +872,7 @@ class WorldAgentTrainer(RayPPOTrainer):
                                                                 actor_rollout_wg=self.actor_rollout_wg,
                                                                 envs=self.envs,
                                                                 is_train=True,
+                                                                current_global_step=self.global_steps,
                                                                 )
                         for k, v in metrics_dict.items():
                             if sum(v) > 0:
