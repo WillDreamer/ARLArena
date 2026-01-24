@@ -15,7 +15,7 @@ echo "Detected ${NUM_GPUS} GPUs for this run"
 
 ROLLOUT_MODE="sync"
 num_cpus_per_env_worker=0.2 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
-train_data_size=16
+train_data_size=4
 val_data_size=128
 group_size=8
 mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
@@ -33,7 +33,7 @@ project_name="alfworld"
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
 PORT=1113
-ray start --head --port $PORT --dashboard-port=1032
+ray start --head --port $PORT --dashboard-port=1034
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,8 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_DAPO_${estimator}_w_KL_cold_start_15"
-    # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_off_4"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
@@ -101,9 +100,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=3 \
-        algorithm.filter_groups.cold_start_steps=15 \
         env.env_name=alfworld/AlfredTWEnv \
         env.seed=$seed \
         env.max_steps=50 \
@@ -118,7 +114,7 @@ do
         trainer.nnodes=1 \
         trainer.save_freq=10 \
         trainer.test_freq=5 \
-        trainer.total_epochs=200 \
+        trainer.total_epochs=400 \
         trainer.max_actor_ckpt_to_keep=3 \
         trainer.val_before_train=False $@
 done

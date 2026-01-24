@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -32,8 +32,8 @@ project_name="alfworld"
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1114
-ray start --head --port $PORT --dashboard-port=1033
+PORT=1112
+ray start --head --port $PORT --dashboard-port=1031
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,7 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_w/o_lower_bound_seq_mask"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_w/o_lower_bound_seq_mask_small"
     # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
@@ -80,7 +80,7 @@ do
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.actor.clip_ratio_low=1.0 \
         actor_rollout_ref.actor.use_seq_mask=True \
-        actor_rollout_ref.actor.seq_mask_delta=0.1 \
+        actor_rollout_ref.actor.seq_mask_delta=3e-3 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
