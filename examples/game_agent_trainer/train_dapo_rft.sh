@@ -34,7 +34,7 @@ MODEL=${SFT_MODEL}  # 使用合并后的模型
 Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_rft"
-estimator="grpo"
+estimator="dapo"
 experiment_name="${MODEL_SHORT}_${estimator}"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
@@ -125,5 +125,7 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.total_epochs=200 \
     trainer.val_before_train=False \
     trainer.max_actor_ckpt_to_keep=3 \
+    algorithm.filter_groups.enable=True \
+    algorithm.filter_groups.max_num_gen_batches=3 \
     trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
     critic.model.path=$Critic_MODEL $@
