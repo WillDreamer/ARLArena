@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -15,7 +15,7 @@ echo "Detected ${NUM_GPUS} GPUs for this run"
 
 ROLLOUT_MODE="sync"
 num_cpus_per_env_worker=0.2 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
-train_data_size=16
+train_data_size=32
 val_data_size=128
 group_size=8
 mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
@@ -32,8 +32,8 @@ project_name="alfworld"
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1113
-ray start --head --port $PORT --dashboard-port=1032
+PORT=1114
+ray start --head --port $PORT --dashboard-port=1035
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,8 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_DAPO_${estimator}_w_KL_cold_start_15"
-    # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_off_32"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
     python3 -m recipe.world_agent.main_world_agent\
@@ -101,9 +100,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=3 \
-        algorithm.filter_groups.cold_start_steps=15 \
         env.env_name=alfworld/AlfredTWEnv \
         env.seed=$seed \
         env.max_steps=50 \

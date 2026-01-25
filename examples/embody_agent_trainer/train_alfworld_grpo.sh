@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3 4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -20,22 +20,22 @@ val_data_size=128
 group_size=8
 mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
-MODEL=willamazon1/Qwen3-4B-rft-alfworld
+MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
 estimator="grpo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
-if pgrep -u "$USER" "ray" > /dev/null; then
-    echo "==================== Detected existing Ray processes, exiting... ===================="
-    echo "==================== run "ray stop" to stop ray ===================="
-    exit 1
-fi
+# if pgrep -u "$USER" "ray" > /dev/null; then
+#     echo "==================== Detected existing Ray processes, exiting... ===================="
+#     echo "==================== run "ray stop" to stop ray ===================="
+#     exit 1
+# fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1111
-ray start --head --port $PORT --dashboard-port=1030
+PORT=1110
+ray start --head --port $PORT --dashboard-port=1029
 
-WANDB_API_KEY="272dc3566c3a3bff61862fe1de87fe2aa3582963" # Modify your wandb key
+WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
 if [ "$WANDB_API_KEY" != "" ]; then
@@ -74,7 +74,7 @@ do
         actor_rollout_ref.actor.ppo_mini_batch_size=256 \
         actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
         actor_rollout_ref.actor.use_kl_loss=True \
-        actor_rollout_ref.actor.kl_loss_update=False \
+        actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -114,7 +114,7 @@ do
         trainer.nnodes=1 \
         trainer.save_freq=10 \
         trainer.test_freq=5 \
-        trainer.total_epochs=150 \
+        trainer.total_epochs=200 \
         trainer.max_actor_ckpt_to_keep=3 \
-        trainer.val_before_train=True $@
+        trainer.val_before_train=False $@
 done

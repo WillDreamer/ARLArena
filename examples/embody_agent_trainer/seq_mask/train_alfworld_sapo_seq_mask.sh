@@ -4,7 +4,7 @@ unset MKL_SERVICE_FORCE_INTEL
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
 # Automatically concatenate CUDA_VISIBLE_DEVICES according to GPU_LIST
 CUDA_VISIBLE_DEVICES=$(IFS=, ; echo "${GPU_LIST[*]}")
 export CUDA_VISIBLE_DEVICES
@@ -22,7 +22,7 @@ mode="mean_std_norm" # "mean_norm" or "mean_std_norm"
 
 MODEL=willamazon1/Qwen3-4B-rft-alfworld-e1
 MODEL_SHORT="${MODEL##*/}"
-estimator="grpo"
+estimator="sapo"
 project_name="alfworld"
 
 # Check if any ray processes are running, exit if present, otherwise start ray
@@ -32,8 +32,8 @@ project_name="alfworld"
 #     exit 1
 # fi
 # PORT=$(( ( RANDOM % 10000 +1000) ))
-PORT=1113
-ray start --head --port $PORT --dashboard-port=1032
+PORT=1111
+ray start --head --port $PORT --dashboard-port=1030
 
 WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 # ============================ Preparation ============================
@@ -54,7 +54,7 @@ python3 -m examples.data_preprocess.prepare \
 # for seed in 0 42 33
 for seed in 0
 do
-    experiment_name="Seed${seed}_${MODEL_SHORT}_DAPO_${estimator}_w_KL_cold_start_15"
+    experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}_w_KL_seq_mask"
     # experiment_name="Seed${seed}_${MODEL_SHORT}_${estimator}"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
@@ -78,6 +78,10 @@ do
         actor_rollout_ref.actor.kl_loss_update=True \
         actor_rollout_ref.actor.kl_loss_coef=0.01 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+        actor_rollout_ref.actor.tau_pos=1.0 \
+        actor_rollout_ref.actor.tau_neg=1.05 \
+        actor_rollout_ref.actor.use_seq_mask=True \
+        actor_rollout_ref.actor.seq_mask_delta=3e-3 \
         actor_rollout_ref.model.enable_gradient_checkpointing=True \
         actor_rollout_ref.actor.fsdp_config.param_offload=False \
         actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -101,9 +105,6 @@ do
         algorithm.gamma=0.95 \
         algorithm.gigpo.step_advantage_w=1.0 \
         algorithm.gigpo.mode=$mode \
-        algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=3 \
-        algorithm.filter_groups.cold_start_steps=15 \
         env.env_name=alfworld/AlfredTWEnv \
         env.seed=$seed \
         env.max_steps=50 \

@@ -397,6 +397,7 @@ class DataParallelPPOActor(BasePPOActor):
         on_policy = len(mini_batches) == 1 and self.config.ppo_epochs == 1
 
         metrics = {}
+        metrics['actor/off_policy_step'] = len(mini_batches) - 1
 
         logprobs_dp = {
             "log_prob": [],
