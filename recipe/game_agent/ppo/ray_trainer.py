@@ -353,6 +353,9 @@ class GameAgentTrainer(RayPPOTrainer):
         self.val_envs = val_envs
         self.validation_generations_logger = GenerationsLogger()
 
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "gspo"
         if self.config.algorithm.adv_estimator == AdvantageEstimator.AEPO:
             with open_dict(self.config):
                 self.config.actor_rollout_ref.actor.policy_loss.loss_mode = "aepo"
@@ -1113,8 +1116,11 @@ class GameAgentTrainer(RayPPOTrainer):
                 logger.log(data=metrics, step=self.global_steps)
 
                 progress_bar.update(1)
-                self.global_steps += 1
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
+                    # Explicitly finish logging to ensure all metrics are uploaded
+                    for backend_name, logger_instance in logger.logger.items():
+                        if hasattr(logger_instance, 'finish'):
+                            logger_instance.finish()
                     return
