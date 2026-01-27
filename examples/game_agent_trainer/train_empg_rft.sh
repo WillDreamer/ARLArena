@@ -2,13 +2,10 @@ set -x
 ENGINE=${1:-vllm}
 
 # ======================== GPU auto selection ========================
-GPU_LIST=(4 5 6 7)  # <<<------  which GPUs to use, directly fill here
+GPU_LIST=(0 1 2 3)  # <<<------  which GPUs to use, directly fill here
 ulimit -n 1048576
 
-# EXTRA: clean ray trainer first
-ray stop --force
-
-export RAY_TMPDIR="/data2/dannie/ray_$(date +%s)"
+export RAY_TMPDIR="/home/ubuntu/.cache/ray"
 rm -rf "$RAY_TMPDIR"
 mkdir -p "$RAY_TMPDIR"
 
@@ -28,22 +25,18 @@ group_size=8  # TODO: increase to 16?
 ROLLOUT_MODE="sync"
 mode="mean_std_norm"
 
-# ========== 模型配置 ==========
-# 使用合并后的模型作为初始模型
-# 如果合并后的模型在本地，使用本地路径；如果在 HuggingFace Hub，使用 Hub ID
 SFT_MODEL="DannieSYD/Qwen3-VL-4B-Instruct-sft-with-visual"
 MODEL=${SFT_MODEL}  # 使用合并后的模型
 
-Critic_MODEL=Qwen/Qwen3-4B-Instruct-2507
 MODEL_SHORT="${MODEL##*/}"
 project_name="verl_agent_sokoban_rft"
 estimator="empg"
-experiment_name="${MODEL_SHORT}_${estimator}"
+experiment_name="${MODEL_SHORT}_${estimator}_W_KL"
 
 mkdir -p checkpoints/${project_name}/${experiment_name}
 
 # WANDB_API_KEY="a7be45528eb0e10c37315748df65f21e5c09d71c" # Modify your wandb key
-WANDB_API_KEY="59e47d8e42ea78659419eee486a5c4e4a26e7c4e" # Modify your wandb key
+WANDB_API_KEY="9efe0766ba036b4ec654b0fadd5c9a93435a4ef0" # Modify your wandb key
 
 # ============================ Preparation ============================
 # Login to WandB (if API key is provided)
@@ -54,9 +47,8 @@ if [ "$WANDB_API_KEY" != "" ]; then
     export WANDB_DIR=${SAVE_PATH}
 fi
 
-PORT=$(( ( RANDOM % 999 ) + 1001 ))
-DASHBOARD_PORT=$(( ( RANDOM % 999 ) + 1001 ))
-ray start --head --port $PORT --dashboard-port $DASHBOARD_PORT
+PORT=1110
+ray start --head --port $PORT --dashboard-port=1029
 
 python3 -m examples.data_preprocess.prepare \
     --mode 'visual' \
@@ -66,10 +58,7 @@ python3 -m examples.data_preprocess.prepare \
 TRAIN_DATA="$HOME/data/visual/train.parquet"
 VAL_DATA="$HOME/data/visual/test.parquet"
 
-mkdir -p /data1/dannie/projects/ARLArena/examples/game_agent_trainer/$experiment_name
-
 python3 -m recipe.game_agent.main_game_agent_ablation \
-    algorithm.adv_estimator=$estimator \
     algorithm.adv_estimator=$estimator \
     data.train_files=$TRAIN_DATA \
     data.val_files=$VAL_DATA \
@@ -87,13 +76,13 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.actor.kl_loss_update=False \
+    actor_rollout_ref.actor.kl_loss_update=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=True \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
@@ -127,6 +116,5 @@ python3 -m recipe.game_agent.main_game_agent_ablation \
     trainer.test_freq=5 \
     trainer.total_epochs=200 \
     trainer.val_before_train=False \
-    trainer.max_actor_ckpt_to_keep=3 \
-    trainer.rollout_data_dir=/data1/dannie/projects/ARLArena/examples/game_agent_trainer/rollout_traces/$experiment_name \
-    critic.model.path=$Critic_MODEL $@
+    trainer.max_actor_ckpt_to_keep=1 \
+    trainer.rollout_data_dir=$HOME/ARLArena/outputs/${project_name}/${experiment_name} $@
