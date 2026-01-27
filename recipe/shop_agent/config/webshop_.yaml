@@ -260,6 +260,7 @@ algorithm:
   filter_groups: # DAPO from https://arxiv.org/abs/2503.14476
     enable: False
     max_num_gen_batches: 10
+    cold_start_steps: 0 
 
 trainer:
   balance_batch: True

@@ -33,7 +33,7 @@ MODEL_SHORT="${MODEL##*/}"
 
 #* estimator 可选: gae, grpo, reinforce_plus_plus, reinforce_plus_plus_baseline, remax, rloo, grpo_passk, 
 #* gigpo, aepo, gspo, sapo, dgrpo, vanilla_grpo, dapo, empg, cispo
-estimator="grpo" 
+estimator="gigpo" 
 project_name="ARLArena_webshop"
 max_response_length=512
 
@@ -53,10 +53,10 @@ python3 -m examples.data_preprocess.prepare \
 
 for seed in 0
 do
-    experiment_name="${MODEL_SHORT}_${estimator}_len_${max_response_length}_format_error_kl"
+    experiment_name="${MODEL_SHORT}_final_len_${max_response_length}_format_error_kl"
     mkdir -p checkpoints/${project_name}/${experiment_name}
 
-    python3 -m recipe.shop_agent.main_shop_agent \
+    python3 -m recipe.shop_agent.main_shop_agent_final \
         algorithm.adv_estimator=$estimator \
         data.train_files=$HOME/data/text/train.parquet \
         data.val_files=$HOME/data/text/test.parquet \
@@ -96,7 +96,7 @@ do
         algorithm.use_kl_in_reward=False \
         algorithm.gamma=0.95 \
         algorithm.filter_groups.enable=True \
-        algorithm.filter_groups.max_num_gen_batches=3 \
+        algorithm.filter_groups.max_num_gen_batches=2 \
         algorithm.filter_groups.cold_start_steps=15 \
         env.env_name=Webshop \
         env.seed=$seed \
